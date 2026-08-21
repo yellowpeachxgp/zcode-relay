@@ -64,6 +64,7 @@ describe("AccountPool", () => {
     pool.markFailure("zai-secret", "auth", "上游返回 401");
 
     const view = pool.snapshot("zai-secret");
+    if (!view) throw new Error("expected account snapshot");
     expect(view?.status satisfies AccountStatus).toBe("invalid");
     expect(view?.credentialMasked).toContain("super-");
     expect(view?.credentialMasked).not.toBe("super-secret-api-key");
