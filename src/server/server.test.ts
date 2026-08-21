@@ -8,6 +8,7 @@ import { handleListModels } from "./routes-openai.js";
 import { handleMessages } from "./routes-anthropic.js";
 import type { ProxyConfig } from "../config/types.js";
 import { AuthManager } from "../auth/manager.js";
+import { AccountPool } from "../auth/pool.js";
 
 function makeConfig(overrides: Partial<ProxyConfig> = {}): ProxyConfig {
   return {
@@ -212,6 +213,23 @@ describe("proxy API key auth", () => {
 
     const resp = await handler(new Request("http://localhost/v1/models"));
     expect(resp.status).toBe(200);
+  });
+});
+
+describe("internal control routing", () => {
+  it("uses the independent control key before public proxy authentication", async () => {
+    const config = makeConfig({
+      auth: { mode: "apikey", apiKey: "test", proxyApiKey: "public-secret" },
+      control: { enabled: true, adminKey: "control-secret" },
+    });
+    const pool = new AccountPool();
+    pool.add({ id: "zai-1", provider: "zai", credential: { apiKey: "pool-secret", provider: "zai" } });
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", pool });
+    const handler = createFetchHandler({ config, auth });
+
+    const response = await handler(new Request("http://localhost/internal/accounts", { headers: { authorization: "Bearer control-secret" } }));
+    expect(response.status).toBe(200);
+    expect((await response.json()).accounts[0].credentialMasked).toBe("********");
   });
 });
 

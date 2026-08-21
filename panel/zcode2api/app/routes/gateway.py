@@ -18,6 +18,7 @@ from .. import logs, settings
 from ..agent import build_request
 from ..auth_admin import verify_gateway_key
 from ..captcha import captcha_manager
+from ..core_client import CoreClient, CoreUnavailable
 from ..models import Account, Status
 from ..quota import fetch_quota
 from ..store import store
@@ -41,6 +42,19 @@ AVAILABLE_MODELS = ["GLM-5.2", "GLM-5-Turbo"]
 
 # 命中以下信号则认为账号额度用完
 _EXHAUST_KEYWORDS = ("quota", "insufficient", "balance", "exhaust", "额度", "余额不足")
+
+
+def _core_client() -> CoreClient:
+    return CoreClient(
+        settings.CORE_URL,
+        settings.CORE_ADMIN_KEY,
+        proxy_key=settings.CORE_PROXY_KEY,
+        timeout=settings.CORE_TIMEOUT,
+    )
+
+
+def _core_error(error: CoreUnavailable) -> JSONResponse:
+    return JSONResponse({"error": {"message": str(error), "type": "core_unavailable"}}, status_code=503)
 
 
 def _detect_provider(body: dict, headers) -> str:
@@ -107,6 +121,11 @@ def _last_user_text(body: dict) -> str:
 @router.get("/v1/models", dependencies=[Depends(verify_gateway_key)])
 async def list_models():
     """列出可用模型（Anthropic /v1/models 风格）。"""
+    if settings.CORE_ENABLED:
+        try:
+            return await _core_client().models()
+        except CoreUnavailable as error:
+            return _core_error(error)
     return {
         "object": "list",
         "data": [
@@ -118,6 +137,12 @@ async def list_models():
 
 @router.post("/v1/messages", dependencies=[Depends(verify_gateway_key)])
 async def messages(request: Request):
+    if settings.CORE_ENABLED:
+        try:
+            return await _core_client().proxy(request, "/v1/messages")
+        except CoreUnavailable as error:
+            return _core_error(error)
+
     try:
         body = await request.json()
     except (json.JSONDecodeError, ValueError):

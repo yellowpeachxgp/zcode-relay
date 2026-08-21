@@ -6,6 +6,7 @@ import hmac
 
 from fastapi import Header, HTTPException, Query, status
 
+from . import settings
 from .store import store
 
 
@@ -43,7 +44,7 @@ async def verify_gateway_key(
     x_api_key: str | None = Header(default=None, alias="x-api-key"),
 ) -> None:
     """校验 /v1/messages 网关访问密钥（未配置则放行）。"""
-    key = store.gateway_key()
+    key = settings.GATEWAY_KEY or store.gateway_key()
     if not key:
         return
     token = _extract_bearer(authorization) or x_api_key

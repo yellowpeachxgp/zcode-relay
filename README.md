@@ -197,6 +197,9 @@ multi-session autosave (localStorage). Open Settings (⚙) to configure.
 | `identity.refererOrigin` | `ZCODE_REFERER_ORIGIN` | `https://zcode.z.ai` | `HTTP-Referer` URL |
 | `endpointRouting.enabled` | `ZCODE_ENDPOINT_ROUTING` | `true` | Server-controlled upstream URL remapping via `zcode.z.ai/api/v1/agent/configs` (mirrors ZCode's `ProviderEndpointRoutingService`; fail-open) |
 | `clientSigning.enabled` | `ZCODE_CLIENT_SIGNING` | `true` | Client request signing V4 (Ed25519 + proof-of-work, gate-driven; only activates when the server sets `codingPlanSignature.enable=true`; fail-open) |
+| `control.enabled` | `ZCODE_CONTROL_ENABLED` | `false` | 启用独立管理密钥保护的账号池控制 API |
+| `control.adminKey` | `ZCODE_CONTROL_ADMIN_KEY` | — | 面板访问 `/internal/*` 的管理密钥，不能与 `auth.proxyApiKey` 相同 |
+| `control.accountStorePath` | `ZCODE_ACCOUNT_STORE_PATH` | `data/accounts.enc.json` | AES-GCM 加密账号存储路径 |
 | config file path | `ZCODE_PROXY_CONFIG` | `config.yaml` | Config file to load on `serve` |
 
 Start-plan captcha tunables (env only): `ZCODE_CAPTCHA_RETRIES`, `ZCODE_CAPTCHA_TIMEOUT_MS`, `ZCODE_CAPTCHA_SDK_LOAD_MS`.
@@ -339,6 +342,14 @@ The proxy lists these models on `GET /v1/models` (pinned to the GLM coding-plan 
 | `glm-5.3` | 1M | 128K |
 
 Requests for models not in this list are still forwarded upstream — the listing is informational, not a gate.
+
+## zcode-relay 账号池部署
+
+使用 `docker-compose.zcode-relay.yml` 时，核心只在 Compose 网络内提供服务，面板对外提供可视化入口。先在部署环境设置 `ZCODE_CORE_PROXY_KEY`、`ZCODE_CORE_ADMIN_KEY`、`ZCODE_PANEL_ADMIN_KEY` 和 `ZCODE_GATEWAY_KEY`，再启动：
+
+    docker compose -f docker-compose.zcode-relay.yml up -d --build
+
+面板通过 `ZCODE_CORE_URL`、`ZCODE_CORE_ADMIN_KEY` 调用核心 `/internal/*`；核心账号凭据写入挂载卷中的 AES-GCM 加密文件，面板核心模式不会回退到本地账号池或直接访问上游。
 
 ## License
 

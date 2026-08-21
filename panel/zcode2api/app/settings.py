@@ -31,6 +31,13 @@ def _int(env_name: str, default: int) -> int:
         return default
 
 
+def _bool(env_name: str, default: bool = False) -> bool:
+    raw = os.getenv(env_name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # ── 目录 ─────────────────────────────────────────────────────────────────────
 DATA_DIR = _resolve_path("ZCODE_DATA_DIR", "data")
 # 账号与设置持久化到本地 SQLite（与 grok2api 的 local 后端一致）
@@ -55,6 +62,15 @@ CAPTCHA_SOLVER_DIR = ROOT_DIR / "captcha_node"
 CAPTCHA_SOLVER_JS = CAPTCHA_SOLVER_DIR / "solver.js"
 CAPTCHA_SOLVE_RETRIES = _int("ZCODE_CAPTCHA_RETRIES", 4)
 CAPTCHA_SOLVE_TIMEOUT = _int("ZCODE_CAPTCHA_TIMEOUT", 40)  # 每次求解超时（秒）
+
+# ── zcode-relay 核心 ───────────────────────────────────────────────────────
+# 开启后，面板账号与流量都通过核心内部 API；本地 SQLite 不再作为运行期账号池。
+CORE_ENABLED = _bool("ZCODE_CORE_ENABLED", False)
+CORE_URL = (os.getenv("ZCODE_CORE_URL", "http://core:8080") or "http://core:8080").rstrip("/")
+CORE_ADMIN_KEY = os.getenv("ZCODE_CORE_ADMIN_KEY", "")
+CORE_PROXY_KEY = os.getenv("ZCODE_CORE_PROXY_KEY", "")
+CORE_TIMEOUT = float(os.getenv("ZCODE_CORE_TIMEOUT", "10"))
+GATEWAY_KEY = os.getenv("ZCODE_GATEWAY_KEY", "")
 
 # ── 用量监控 ─────────────────────────────────────────────────────────────────
 # 后台自动刷新账号额度的间隔（秒）。0 表示关闭后台轮询，仅按需刷新。

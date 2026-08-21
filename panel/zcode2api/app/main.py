@@ -30,7 +30,8 @@ def _display_host() -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    monitor.start()
+    if not settings.CORE_ENABLED:
+        monitor.start()
     base = f"http://{_display_host()}:{settings.PORT}"
     logs.banner([
         f"{logs._B}{logs._MAG}zcode2api{logs._R} {logs._DIM}v{settings.APP_VERSION} · Python{logs._R}",
@@ -40,7 +41,8 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
-        await monitor.stop()
+        if not settings.CORE_ENABLED:
+            await monitor.stop()
         await captcha_manager.close()
 
 

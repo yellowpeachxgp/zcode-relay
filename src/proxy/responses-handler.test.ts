@@ -2,6 +2,8 @@ import { describe, it, expect } from "bun:test";
 import { handleResponses } from "./responses-handler.js";
 import { ResponseStore } from "../responses/store.js";
 import type { ProxyConfig } from "../config/types.js";
+import { AccountPool } from "../auth/pool.js";
+import { AuthManager } from "../auth/manager.js";
 
 const CONFIG: ProxyConfig = {
   server: { port: 0, host: "127.0.0.1" },
@@ -63,6 +65,28 @@ function makeReq(body: unknown): Request {
 }
 
 describe("handleResponses", () => {
+  it("账号池模式下 Responses 上游 429 会切换账号并记录用量", async () => {
+    const pool = new AccountPool({ maxConcurrencyPerAccount: 1 });
+    pool.add({ id: "zai-1", provider: "zai", credential: { apiKey: "key-1", provider: "zai" } });
+    pool.add({ id: "zai-2", provider: "zai", credential: { apiKey: "key-2", provider: "zai" } });
+    const pooledAuth = new AuthManager({ mode: "apikey", provider: "zai", pool });
+    const seenKeys: string[] = [];
+    let calls = 0;
+    const fetchImpl = (async (input: Request): Promise<Response> => {
+      seenKeys.push(input.headers.get("x-api-key") ?? "");
+      calls += 1;
+      return calls === 1
+        ? new Response("rate limited", { status: 429 })
+        : new Response(anthropicMsg("pool response"), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+
+    const response = await handleResponses(makeReq({ model: "glm-5.2", input: "hello" }), { config: CONFIG, auth: pooledAuth, fetchImpl });
+    expect(response.status).toBe(200);
+    expect(seenKeys).toEqual(["key-1", "key-2"]);
+    expect(pool.snapshot("zai-1")?.status).toBe("cooling");
+    expect(pool.snapshot("zai-2")?.usage).toEqual({ inputTokens: 3, outputTokens: 2, updatedAt: expect.any(Number) });
+  });
+
   it("returns a ResponsesResponse with message output for a basic text request", async () => {
     const fetchImpl = chatUpstream(anthropicMsg("hi back"));
     const resp = await handleResponses(makeReq({ model: "glm-5.2", input: "hello" }), { config: CONFIG, auth, fetchImpl });

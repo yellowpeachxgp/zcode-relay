@@ -7,7 +7,9 @@ import time
 from fastapi import APIRouter, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse
 
+from .. import settings
 from ..auth_admin import verify_admin_key
+from ..core_client import CoreClient, CoreUnavailable
 from ..models import PROVIDERS, Status
 from ..oauth import ZaiAuthFlow
 from ..quota import fetch_quota, refresh_accounts
@@ -19,6 +21,26 @@ router = APIRouter(prefix="/admin/api", dependencies=[Depends(verify_admin_key)]
 _login_flows: dict[str, ZaiAuthFlow] = {}
 
 
+def _core() -> CoreClient | None:
+    if not settings.CORE_ENABLED:
+        return None
+    if not settings.CORE_ADMIN_KEY:
+        raise HTTPException(503, "核心不可用：未配置 ZCODE_CORE_ADMIN_KEY")
+    return CoreClient(
+        settings.CORE_URL,
+        settings.CORE_ADMIN_KEY,
+        proxy_key=settings.CORE_PROXY_KEY,
+        timeout=settings.CORE_TIMEOUT,
+    )
+
+
+async def _call_core(operation):
+    try:
+        return await operation
+    except CoreUnavailable as error:
+        raise HTTPException(503, str(error)) from error
+
+
 # ── 鉴权探针 ─────────────────────────────────────────────────────────────────
 @router.get("/verify")
 async def verify():
@@ -28,6 +50,9 @@ async def verify():
 # ── 账号列表 + 概览统计 ──────────────────────────────────────────────────────
 @router.get("/accounts")
 async def list_accounts():
+    core = _core()
+    if core:
+        return await _call_core(core.list_accounts())
     now = time.time()
     accounts = [a.public_view() for a in store.list_accounts()]
     stats = {"total": len(accounts), "active": 0, "exhausted": 0,
@@ -44,6 +69,9 @@ async def list_accounts():
 
 @router.get("/status")
 async def status_info():
+    core = _core()
+    if core:
+        return await _call_core(core.status())
     return {
         "providers": list(PROVIDERS),
         "gateway_key_set": bool(store.gateway_key()),
@@ -67,6 +95,10 @@ async def add_accounts(payload: dict = Body(...)):
     if not tokens:
         raise HTTPException(400, "请输入至少一个 Token / API Key")
 
+    core = _core()
+    if core:
+        return await _call_core(core.add_accounts(provider, tokens, payload.get("name")))
+
     added = []
     for tok in dict.fromkeys(tokens):  # 去重保序
         name = payload.get("name") or f"{provider}-{len(store.list_accounts(provider)) + 1}"
@@ -82,6 +114,9 @@ async def add_accounts(payload: dict = Body(...)):
 # ── 删除账号 ─────────────────────────────────────────────────────────────────
 @router.delete("/accounts")
 async def delete_accounts(ids: list[str] = Body(...)):
+    core = _core()
+    if core:
+        return await _call_core(core.delete_accounts(ids))
     deleted = 0
     for aid in ids:
         acc = store.find_any(aid)
@@ -93,6 +128,9 @@ async def delete_accounts(ids: list[str] = Body(...)):
 # ── 编辑账号 ─────────────────────────────────────────────────────────────────
 @router.put("/accounts/{account_id}")
 async def edit_account(account_id: str, payload: dict = Body(...)):
+    core = _core()
+    if core:
+        return await _call_core(core.edit_account(account_id, payload))
     acc = store.find_any(account_id)
     if not acc:
         raise HTTPException(404, "账号不存在")
@@ -113,6 +151,9 @@ async def edit_account(account_id: str, payload: dict = Body(...)):
 # ── 启用 / 禁用 ──────────────────────────────────────────────────────────────
 @router.post("/accounts/{account_id}/enabled")
 async def set_enabled(account_id: str, payload: dict = Body(...)):
+    core = _core()
+    if core:
+        return await _call_core(core.set_enabled(account_id, bool(payload.get("enabled", True))))
     acc = store.find_any(account_id)
     if not acc:
         raise HTTPException(404, "账号不存在")
@@ -125,6 +166,9 @@ async def set_enabled(account_id: str, payload: dict = Body(...)):
 @router.post("/accounts/refresh")
 async def refresh(payload: dict = Body(default=None)):
     payload = payload or {}
+    core = _core()
+    if core:
+        return await _call_core(core.refresh())
     if payload.get("all"):
         targets = [a for a in store.list_accounts("zai") if a.mode == "jwt"]
     else:
@@ -136,6 +180,9 @@ async def refresh(payload: dict = Body(default=None)):
 
 @router.post("/accounts/{account_id}/refresh")
 async def refresh_one(account_id: str):
+    core = _core()
+    if core:
+        return await _call_core(core.refresh(account_id))
     acc = store.find_any(account_id)
     if not acc:
         raise HTTPException(404, "账号不存在")
@@ -149,6 +196,8 @@ async def refresh_one(account_id: str):
 @router.post("/login/start")
 async def login_start():
     """发起 Z.AI OAuth，返回授权链接供前端展示。"""
+    if _core():
+        raise HTTPException(409, "核心模式请通过核心控制面接入 OAuth，面板不保存第二套账号池")
     flow = ZaiAuthFlow()
     try:
         flow_id, authorize_url = await flow.init()
@@ -205,6 +254,14 @@ async def login_poll(flow_id: str):
 # ── 设置 ─────────────────────────────────────────────────────────────────────
 @router.get("/settings")
 async def get_settings():
+    if settings.CORE_ENABLED:
+        return {
+            "core_enabled": True,
+            "core_url": settings.CORE_URL,
+            "gateway_key": "已由核心管理",
+            "admin_key": "已由面板环境管理",
+            "quota_refresh_interval": 0,
+        }
     return {
         "admin_key": store.admin_key(),
         "gateway_key": store.gateway_key(),
@@ -214,6 +271,8 @@ async def get_settings():
 
 @router.put("/settings")
 async def update_settings(payload: dict = Body(...)):
+    if settings.CORE_ENABLED:
+        raise HTTPException(409, "核心模式的连接与密钥由面板环境变量管理")
     if "admin_key" in payload:
         key = (payload["admin_key"] or "").strip()
         if not key:
@@ -233,10 +292,14 @@ async def update_settings(payload: dict = Body(...)):
 # ── 导入 / 导出 ─────────────────────────────────────────────────────────────
 @router.get("/export")
 async def export_accounts():
+    if settings.CORE_ENABLED:
+        raise HTTPException(409, "核心模式禁止从面板导出凭据")
     return store.export()
 
 
 @router.post("/import")
 async def import_accounts(payload: dict = Body(...)):
+    if settings.CORE_ENABLED:
+        raise HTTPException(409, "核心模式禁止向面板本地账号池导入凭据")
     count = store.import_accounts(payload)
     return {"count": count}

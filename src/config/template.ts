@@ -109,6 +109,15 @@ clientSigning:
   enabled: true
   origin: "https://zcode.z.ai"
 
+# Internal account-pool control API. Keep this disabled unless the panel and
+# core share a private network. The control key is independent from proxyApiKey.
+control:
+  enabled: false
+  # adminKey: "change-me-and-keep-it-private"
+  accountStorePath: "data/accounts.enc.json"
+  coolingSeconds: 30
+  maxConcurrencyPerAccount: 4
+
 logging:
   level: info
 `;

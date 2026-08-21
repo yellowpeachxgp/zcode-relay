@@ -16,7 +16,7 @@ export async function executeWithAccountFailover(
   initialLease?: AccountLease,
 ): Promise<AccountFailoverResult> {
   let lease = initialLease ?? await auth.acquireCredential(provider);
-  const pool = auth.getPool();
+  const pool = typeof auth.getPool === "function" ? auth.getPool() : null;
   const attemptLimit = Math.max(1, Math.floor(maxAttempts));
 
   for (let attempt = 1; attempt <= attemptLimit; attempt += 1) {
@@ -67,6 +67,7 @@ async function acquireNext(
   originalError: unknown,
 ): Promise<AccountLease> {
   try {
+    if (typeof auth.acquireCredential !== "function") throw originalError;
     return await auth.acquireCredential(provider);
   } catch {
     throw originalError;

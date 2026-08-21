@@ -155,6 +155,20 @@ export interface ClientSigningConfig {
   origin: string;
 }
 
+/** Internal control-plane configuration. The control key is never returned by runtime APIs. */
+export interface ControlConfig {
+  /** Enable /internal/* management routes. Default false. */
+  enabled: boolean;
+  /** Independent management key; must not be reused as the public proxy key. */
+  adminKey?: string;
+  /** Encrypted account-store path. Relative paths are resolved from the process directory. */
+  accountStorePath?: string;
+  /** Cooling duration for rate-limit, network and upstream failures. */
+  coolingSeconds?: number;
+  /** Default per-account concurrency limit. */
+  maxConcurrencyPerAccount?: number;
+}
+
 /** Top-level proxy configuration. */
 export interface ProxyConfig {
   server: {
@@ -192,6 +206,8 @@ export interface ProxyConfig {
   mcp: McpConfig;
   /** Async (off-peak / idle-plan) bridge configuration. */
   async: AsyncConfig;
+  /** Optional internal control plane for account-pool management. */
+  control?: ControlConfig;
   logging: {
     level: "debug" | "info" | "warn" | "error";
   };

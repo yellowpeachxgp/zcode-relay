@@ -4,7 +4,7 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { parse } from "yaml";
-import type { ClientIdentityConfig, ProxyConfig, ProviderEndpoints, ProxyIdentity, ResponsesConfig, McpConfig, AsyncConfig, EndpointRoutingConfig, ClientSigningConfig } from "./types.js";
+import type { ClientIdentityConfig, ProxyConfig, ProviderEndpoints, ProxyIdentity, ResponsesConfig, McpConfig, AsyncConfig, EndpointRoutingConfig, ClientSigningConfig, ControlConfig } from "./types.js";
 
 /** Environment variable keys that override YAML values. */
 const ENV = {
@@ -21,6 +21,9 @@ const ENV = {
   ASYNC_MAX_WAIT_MS: "ZCODE_ASYNC_MAX_WAIT_MS",
   ENDPOINT_ROUTING_ENABLED: "ZCODE_ENDPOINT_ROUTING",
   CLIENT_SIGNING_ENABLED: "ZCODE_CLIENT_SIGNING",
+  CONTROL_ENABLED: "ZCODE_CONTROL_ENABLED",
+  CONTROL_ADMIN_KEY: "ZCODE_CONTROL_ADMIN_KEY",
+  ACCOUNT_STORE_PATH: "ZCODE_ACCOUNT_STORE_PATH",
 } as const;
 
 const DEFAULTS = {
@@ -60,6 +63,10 @@ const DEFAULTS = {
   ENDPOINT_ROUTING_ORIGIN: "https://zcode.z.ai",
   CLIENT_SIGNING_ENABLED: true,
   CLIENT_SIGNING_ORIGIN: "https://zcode.z.ai",
+  CONTROL_ENABLED: false,
+  ACCOUNT_STORE_PATH: "data/accounts.enc.json",
+  CONTROL_COOLING_SECONDS: 30,
+  CONTROL_MAX_CONCURRENCY: 4,
 };
 
 /** Printable-ASCII gate copied from the ZCode bundle's `rYn` helper. */
@@ -127,6 +134,7 @@ export function loadConfig(path: string): ProxyConfig {
   const asyncCfg = resolveAsyncConfig(parsed?.async);
   const endpointRouting = resolveEndpointRoutingConfig(parsed?.endpointRouting);
   const clientSigning = resolveClientSigningConfig(parsed?.clientSigning);
+  const control = resolveControlConfig(parsed?.control);
 
   const config: ProxyConfig = {
     server: { port, host },
@@ -143,11 +151,26 @@ export function loadConfig(path: string): ProxyConfig {
     clientSigning,
     mcp,
     async: asyncCfg,
+    control,
     logging: { level: logLevel },
   };
 
   validate(config);
   return config;
+}
+
+function resolveControlConfig(raw: unknown): ControlConfig {
+  const obj = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const enabledEnv = process.env[ENV.CONTROL_ENABLED];
+  const adminKey = process.env[ENV.CONTROL_ADMIN_KEY] ?? (typeof obj.adminKey === "string" ? obj.adminKey.trim() : undefined);
+  const accountStorePath = (process.env[ENV.ACCOUNT_STORE_PATH] ?? (typeof obj.accountStorePath === "string" ? obj.accountStorePath.trim() : DEFAULTS.ACCOUNT_STORE_PATH)).trim();
+  return {
+    enabled: enabledEnv !== undefined ? resolveBool(enabledEnv, DEFAULTS.CONTROL_ENABLED) : resolveBool(obj.enabled, DEFAULTS.CONTROL_ENABLED),
+    ...(adminKey ? { adminKey } : {}),
+    accountStorePath,
+    coolingSeconds: resolveNonNegativeInt(obj.coolingSeconds, DEFAULTS.CONTROL_COOLING_SECONDS, "control.coolingSeconds"),
+    maxConcurrencyPerAccount: resolvePositiveInt(obj.maxConcurrencyPerAccount, DEFAULTS.CONTROL_MAX_CONCURRENCY, "control.maxConcurrencyPerAccount"),
+  };
 }
 
 function resolveClientIdentity(raw: unknown): ClientIdentityConfig {
@@ -354,10 +377,18 @@ function validate(config: ProxyConfig): void {
   if (config.auth.mode === "apikey") {
     const hasGlobal = typeof config.auth.apiKey === "string" && config.auth.apiKey.length > 0;
     const hasProvider = typeof config.providers[config.provider].credential === "string";
-    if (!hasGlobal && !hasProvider) {
+    const hasManagedPool = config.control?.enabled === true;
+    if (!hasGlobal && !hasProvider && !hasManagedPool) {
       throw new Error(
-        `auth.apiKey is required when auth.mode is "apikey" (or set providers.${config.provider}.credential)`,
+        `auth.apiKey is required when auth.mode is "apikey" (or set providers.${config.provider}.credential, or enable control account pool)`,
       );
+    }
+  }
+
+  if (config.control?.enabled) {
+    if (!config.control.adminKey) throw new Error("control.adminKey is required when control.enabled is true");
+    if (config.auth.proxyApiKey && config.control.adminKey === config.auth.proxyApiKey) {
+      throw new Error("control.adminKey must be different from auth.proxyApiKey");
     }
   }
 

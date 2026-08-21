@@ -180,7 +180,7 @@ beforeAll(async () => {
     },
   });
 
-  const config = loadConfig("config.test.yaml");
+  const config = loadConfig("config.example.yaml");
   config.server.port = proxyPort;
   config.server.host = "127.0.0.1";
   config.auth.proxyApiKey = "integration-test-key";

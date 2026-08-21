@@ -1,0 +1,71 @@
+services:
+  core:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zcode-relay-core:local
+    container_name: zcode-relay-core
+    environment:
+      ZCODE_PROXY_CONFIG: /data/config.yaml
+      ZCODE_PROXY_PORT: "8080"
+      ZCODE_PROXY_API_KEY: "${ZCODE_CORE_PROXY_KEY:?请设置 ZCODE_CORE_PROXY_KEY}"
+      ZCODE_CONTROL_ENABLED: "true"
+      ZCODE_CONTROL_ADMIN_KEY: "${ZCODE_CORE_ADMIN_KEY:?请设置 ZCODE_CORE_ADMIN_KEY}"
+      ZCODE_ACCOUNT_STORE_PATH: /data/accounts.enc.json
+      ZCODE_ENDPOINT_ROUTING: "false"
+      ZCODE_CLIENT_SIGNING: "false"
+    volumes:
+      - zcode-relay-core-data:/data
+    expose:
+      - "8080"
+    networks:
+      - zcode-relay
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+  panel:
+    build:
+      context: ./panel/zcode2api
+      dockerfile: Dockerfile
+    image: zcode-relay-panel:local
+    container_name: zcode-relay-panel
+    environment:
+      ZCODE_HOST: 0.0.0.0
+      ZCODE_PORT: "3000"
+      ZCODE_ADMIN_KEY: "${ZCODE_PANEL_ADMIN_KEY:?请设置 ZCODE_PANEL_ADMIN_KEY}"
+      ZCODE_GATEWAY_KEY: "${ZCODE_GATEWAY_KEY:?请设置 ZCODE_GATEWAY_KEY}"
+      ZCODE_CORE_ENABLED: "true"
+      ZCODE_CORE_URL: http://core:8080
+      ZCODE_CORE_ADMIN_KEY: "${ZCODE_CORE_ADMIN_KEY:?请设置 ZCODE_CORE_ADMIN_KEY}"
+      ZCODE_CORE_PROXY_KEY: "${ZCODE_CORE_PROXY_KEY:?请设置 ZCODE_CORE_PROXY_KEY}"
+      ZCODE_CORE_TIMEOUT: "10"
+      ZCODE_QUOTA_REFRESH_INTERVAL: "0"
+    volumes:
+      - zcode-relay-panel-data:/data
+    ports:
+      - "3000:3000"
+    networks:
+      - zcode-relay
+    depends_on:
+      core:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3000/meta', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 20s
+    restart: unless-stopped
+
+networks:
+  zcode-relay:
+    driver: bridge
+
+volumes:
+  zcode-relay-core-data:
+  zcode-relay-panel-data:

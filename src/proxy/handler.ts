@@ -12,7 +12,7 @@
 import type { Format } from "../translator/types.js";
 import type { ProxyConfig } from "../config/types.js";
 import type { AuthManager } from "../auth/manager.js";
-import type { AccountLease } from "../auth/pool-types.js";
+import type { AccountLease, AccountUsage } from "../auth/pool-types.js";
 import { executeWithAccountFailover } from "./failover.js";
 import { getProvider } from "../provider/providers.js";
 import { buildUpstreamHeaderPairs, buildUpstreamRequest, type UpstreamHeaderPair } from "./upstream.js";
@@ -329,6 +329,7 @@ export async function proxyRequest(
     } catch (err) {
       if (debug) debugError(reqId, "captcha_solver_failed", (err as Error).message);
       printRow(reqId, format, meta, 503, started, Date.now(), 0, 0, 0);
+      releaseLease();
       return errorResponse(503, "captcha_solver_failed", (err as Error).message);
     }
   }
@@ -336,7 +337,13 @@ export async function proxyRequest(
   const isSSE = upstreamResp.headers.get("content-type")?.includes("text/event-stream") ?? false;
   if (activeLease && upstreamResp.ok) {
     auth.getPool()?.markSuccess(activeLease.accountId);
+    if (!isSSE) {
+      const usage = await extractResponseUsage(upstreamResp.clone());
+      if (usage) auth.getPool()?.recordUsage(activeLease.accountId, usage);
+    }
   }
+
+  const usageAccountId = activeLease?.accountId;
 
   if (translateOpenAIToAnthropic) {
     if (!upstreamResp.ok) {
@@ -348,7 +355,9 @@ export async function proxyRequest(
     if (isSSE && upstreamResp.body) {
       const translated = anthropicSseToOpenaiSse(upstreamResp.body, meta.model);
       const [clientBody, statsBody] = translated.tee();
-      observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, null, releaseLease);
+      observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, null, releaseLease, (usage) => {
+        if (usageAccountId) auth.getPool()?.recordUsage(usageAccountId, usage);
+      });
       return translatedSseResponse(clientBody);
     }
     const response = await translatedBatchResponse(clientReq, upstreamResp, meta.model, reqId, format, meta, started, headersAt);
@@ -366,7 +375,9 @@ export async function proxyRequest(
     if (isSSE && upstreamResp.body) {
       const translated = openaiSseToAnthropicSse(upstreamResp.body, meta.model);
       const [clientBody, statsBody] = translated.tee();
-      observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, null, releaseLease);
+      observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, null, releaseLease, (usage) => {
+        if (usageAccountId) auth.getPool()?.recordUsage(usageAccountId, usage);
+      });
       return translatedSseResponse(clientBody);
     }
     const response = await translatedOpenAIToAnthropicBatchResponse(clientReq, upstreamResp, reqId, format, meta, started, headersAt);
@@ -376,7 +387,9 @@ export async function proxyRequest(
 
   if (isSSE && upstreamResp.body) {
     const [clientBody, statsBody] = upstreamResp.body.tee();
-    observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, upstreamResp.headers.get("content-encoding"), releaseLease);
+    observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, upstreamResp.headers.get("content-encoding"), releaseLease, (usage) => {
+      if (usageAccountId) auth.getPool()?.recordUsage(usageAccountId, usage);
+    });
     return passthroughResponse(upstreamResp, clientAcceptsGzip(clientReq), clientBody);
   }
 
@@ -909,6 +922,24 @@ function fmtMs(ms: number): string {
   return `${Math.floor(ms / 60_000)}m${Math.floor((ms % 60_000) / 1000)}s`;
 }
 
+async function extractResponseUsage(response: Response): Promise<AccountUsage | null> {
+  try {
+    const value = await response.json() as { usage?: Record<string, unknown> };
+    const usage = value.usage;
+    if (!usage) return null;
+    const inputTokens = numericUsage(usage.input_tokens ?? usage.prompt_tokens);
+    const outputTokens = numericUsage(usage.output_tokens ?? usage.completion_tokens);
+    if (inputTokens === undefined && outputTokens === undefined) return null;
+    return { ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+function numericUsage(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function observeStream(
   reqId: string,
   format: Format,
@@ -918,6 +949,7 @@ function observeStream(
   body: ReadableStream<Uint8Array>,
   contentEncoding: string | null,
   onComplete?: () => void,
+  onUsage?: (usage: AccountUsage) => void,
 ): void {
   const compressed = contentEncoding !== null;
   const dumpOn = dumpEnabled();
@@ -926,14 +958,25 @@ function observeStream(
   let firstChunkAt = 0;
   let totalBytes = 0;
   let firstBytesSample = "";
+  let inputTokens = 0;
+  let outputTokens = 0;
 
   function parseSse(text: string): void {
     for (const line of text.split("\n")) {
       if (!line.startsWith("data:") || line.includes("[DONE]")) continue;
       try {
         const j = JSON.parse(line.slice(5).trim());
-        if (j.usage?.completion_tokens) { tokens = j.usage.completion_tokens; continue; }
-        if (j.usage?.output_tokens) { tokens = j.usage.output_tokens; continue; }
+        const usage = j.usage ?? j.message?.usage;
+        if (usage) {
+          const input = numericUsage(usage.input_tokens ?? usage.prompt_tokens);
+          const output = numericUsage(usage.output_tokens ?? usage.completion_tokens);
+          if (input !== undefined) inputTokens = Math.max(inputTokens, input);
+          if (output !== undefined) {
+            outputTokens = Math.max(outputTokens, output);
+            tokens = output;
+          }
+          continue;
+        }
         // OpenAI content delta: choices[0].delta.content
         const oai = j.choices?.[0]?.delta?.content;
         if (typeof oai === "string" && oai.length > 0) { tokens++; continue; }
@@ -975,19 +1018,23 @@ function observeStream(
     const ttfbMs = (firstChunkAt > 0 ? firstChunkAt : endAt) - requestSentAt;
     const totalMs = endAt - requestSentAt;
     const avgTps = tokens > 0 && totalMs > 0 ? tokens / (totalMs / 1000) : 0;
-    printRow(reqId, format, meta, status, requestSentAt, requestSentAt + ttfbMs, tokens, avgTps, endAt);
-    if (dumpOn) {
-      dumpPhase(reqId, "upstream_stream_summary", {
-        status,
-        contentEncoding,
-        compressed,
-        totalBytes,
-        tokensObserved: tokens,
-        ttfbMs,
-        totalMs,
-        firstBytesSample: firstBytesSample.length > 0 ? firstBytesSample.slice(0, 4096) : "(empty stream)",
-      });
+    try {
+      printRow(reqId, format, meta, status, requestSentAt, requestSentAt + ttfbMs, tokens, avgTps, endAt);
+      if (dumpOn) {
+        dumpPhase(reqId, "upstream_stream_summary", {
+          status,
+          contentEncoding,
+          compressed,
+          totalBytes,
+          tokensObserved: tokens,
+          ttfbMs,
+          totalMs,
+          firstBytesSample: firstBytesSample.length > 0 ? firstBytesSample.slice(0, 4096) : "(empty stream)",
+        });
+      }
+    } finally {
+      if (inputTokens > 0 || outputTokens > 0) onUsage?.({ inputTokens, outputTokens });
+      onComplete?.();
     }
-    onComplete?.();
   })().catch(() => {});
 }

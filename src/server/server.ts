@@ -18,6 +18,7 @@ import { handleResponsesRoute } from "./routes-responses.js";
 import { handleAsyncMessagesRoute, handleAsyncChatRoute, handleAsyncHealthRoute } from "./routes-async.js";
 import { errorResponse } from "../proxy/handler.js";
 import type { ResponseStore } from "../responses/store.js";
+import { handleInternalRoute } from "./internal-routes.js";
 
 interface ServerOptions {
   config: ProxyConfig;
@@ -28,6 +29,8 @@ interface ServerOptions {
   debug?: boolean;
   /** Responses-API state store. When absent, `/v1/responses` runs stateless (`previous_response_id` returns 404). */
   responseStore?: ResponseStore;
+  /** Persist account-pool mutations made by the internal control API. */
+  onPoolChanged?: () => void;
 }
 
 /** Minimal server handle: what the caller needs to print URLs and shut down. */
@@ -75,6 +78,19 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
       });
     }
 
+    if (path === "/internal" || path.startsWith("/internal/")) {
+      return (await handleInternalRoute(req, { config, auth, onPoolChanged: opts.onPoolChanged })) ?? errorResponse(404, "not_found_error", `No route for ${method} ${path}`);
+    }
+
+    // Health is intentionally a low-information liveness probe so container
+    // orchestrators can check it without receiving a client proxy credential.
+    if (path === "/health" || path === "/") {
+      return new Response(JSON.stringify({ status: "ok", provider: config.provider }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+
     if (config.auth.proxyApiKey) {
       const authHeader = req.headers.get("authorization") ?? req.headers.get("x-api-key");
       if (!authHeader || !checkProxyKey(authHeader, config.auth.proxyApiKey)) {
@@ -108,13 +124,6 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
       if (path === "/async/v1/health" && method === "GET") {
         return handleAsyncHealthRoute(req, asyncOpts);
       }
-    }
-
-    if (path === "/health" || path === "/") {
-      return new Response(JSON.stringify({ status: "ok", provider: config.provider }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      });
     }
 
     return errorResponse(404, "not_found_error", `No route for ${method} ${path}`);

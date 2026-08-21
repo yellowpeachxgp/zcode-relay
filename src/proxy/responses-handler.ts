@@ -21,10 +21,13 @@ import { transformRequestBody } from "./body-transformer.js";
 import { getProvider } from "../provider/providers.js";
 import type { ProxyConfig } from "../config/types.js";
 import type { AuthManager } from "../auth/manager.js";
+import type { AccountLease, AccountUsage } from "../auth/pool-types.js";
+import { executeWithAccountFailover } from "./failover.js";
 import { buildUpstreamRequest, buildUpstreamHeaderPairs } from "./upstream.js";
 import { getDefaultEndpointRouting, type EndpointRoutingService } from "./endpoint-routing.js";
 import { getDefaultClientSigning, sendWithClientSigning, type ClientSigningManager } from "./client-signing.js";
 import { credentialString } from "../auth/types.js";
+import type { Credential } from "../auth/types.js";
 import { translateRequestOpenAIToAnthropic, translateResponseAnthropicToOpenAI } from "../translator/openai-to-anthropic.js";
 import { anthropicSseToOpenaiSse } from "../translator/sse-translator.js";
 import type { AnthropicMessagesRequest, AnthropicMessagesResponse } from "../translator/types.js";
@@ -64,6 +67,7 @@ export interface ResponsesHandlerOptions {
   endpointRouting?: EndpointRoutingService | null;
   /** Override the process-wide client signing manager (for testing). `null` disables. */
   clientSigning?: ClientSigningManager | null;
+  maxAccountAttempts?: number;
 }
 
 /** Handle POST /v1/responses. */
@@ -135,9 +139,11 @@ export async function handleResponses(
   const { chatRequest, customToolNames, namespaceMap, hasToolSearch } = translated;
 
   // ── 4. credential + provider ──
-  let cred;
+  let initialLease: AccountLease;
+  let cred: Credential;
   try {
-    cred = await opts.auth.getCredential();
+    initialLease = await acquireResponsesLease(opts.auth, opts.config.provider);
+    cred = initialLease.credential;
   } catch (err) {
     return errorResponse(503, "credential_unavailable", (err as Error).message);
   }
@@ -155,6 +161,7 @@ export async function handleResponses(
     try {
       anthropicReq = translateRequestOpenAIToAnthropic(chatRequest);
     } catch (err) {
+      initialLease.release();
       return errorResponse(400, "translation_failed", `Chat→Anthropic translation failed: ${(err as Error).message}`);
     }
     upstreamRequestBody = transformRequestBody(JSON.stringify(anthropicReq), {
@@ -172,40 +179,60 @@ export async function handleResponses(
   const transformedBody = upstreamRequestBody;
 
   // ── 6. POST upstream ──
-  const upstreamHeaders = buildUpstreamHeaderPairs(clientReq, upstreamFormat, cred, opts.config.identity, opts.config.plan, undefined, undefined);
-  const upstreamReq = buildUpstreamRequest(clientReq, upstreamFormat, providerDef, cred, transformedBody, opts.config.identity, opts.config.plan, undefined, undefined);
-  if (debug) console.log(`[responses] → POST ${upstreamReq.url}`);
-
   let upstreamResp: Response;
+  let activeLease: AccountLease | null = null;
+  let releaseLease = (): void => undefined;
   try {
     const routing = opts.endpointRouting !== undefined ? opts.endpointRouting : getDefaultEndpointRouting(opts.config);
-    const routed = routing ? await routing.resolve(upstreamReq.url, credentialString(cred)) : null;
-    const sendUrl = routed?.routed ? routed.url : upstreamReq.url;
-    if (debug && routed?.routed) console.log(`[responses] endpoint routing: ${upstreamReq.url} -> ${sendUrl}`);
     const signer = opts.clientSigning !== undefined ? opts.clientSigning : getDefaultClientSigning(opts.config);
-    // signing decisions run against the PRE-routing provider URL (mirrors the
-    // client, whose signer wraps the routing transport)
-    upstreamResp = await sendWithClientSigning(signer, {
-      url: upstreamReq.url,
-      headerPairs: upstreamHeaders,
-      credential: credentialString(cred),
-      appVersion: opts.config.identity.appVersion,
-      debug: debug ? (message) => console.log(`[responses] ${message}`) : undefined,
-      send: (finalPairs) => {
-        const req = new Request(sendUrl, {
-          method: "POST",
-          headers: Object.fromEntries(finalPairs),
-          body: transformedBody ?? undefined,
+    const failover = await executeWithAccountFailover(
+      opts.auth,
+      opts.config.provider,
+      async (lease) => {
+        cred = lease.credential;
+        const upstreamHeaders = buildUpstreamHeaderPairs(clientReq, upstreamFormat, cred, opts.config.identity, opts.config.plan, undefined, undefined);
+        const upstreamReq = buildUpstreamRequest(clientReq, upstreamFormat, providerDef, cred, transformedBody, opts.config.identity, opts.config.plan, undefined, undefined);
+        const routed = routing ? await routing.resolve(upstreamReq.url, credentialString(cred)) : null;
+        const sendUrl = routed?.routed ? routed.url : upstreamReq.url;
+        if (debug) console.log(`[responses] → POST ${upstreamReq.url}`);
+        if (debug && routed?.routed) console.log(`[responses] endpoint routing: ${upstreamReq.url} -> ${sendUrl}`);
+        return sendWithClientSigning(signer, {
+          url: upstreamReq.url,
+          headerPairs: upstreamHeaders,
+          credential: credentialString(cred),
+          appVersion: opts.config.identity.appVersion,
+          debug: debug ? (message) => console.log(`[responses] ${message}`) : undefined,
+          send: (finalPairs) => {
+            const req = new Request(sendUrl, {
+              method: "POST",
+              headers: Object.fromEntries(finalPairs),
+              body: transformedBody ?? undefined,
+            });
+            return fetchImpl(req, { method: "POST", headers: Object.fromEntries(finalPairs), body: transformedBody ?? undefined, signal: clientReq.signal });
+          },
         });
-        return fetchImpl(req, { method: "POST", headers: Object.fromEntries(finalPairs), body: transformedBody ?? undefined, signal: clientReq.signal });
       },
-    });
+      opts.maxAccountAttempts ?? 3,
+      initialLease,
+    );
+    upstreamResp = failover.response;
+    activeLease = failover.lease;
+    releaseLease = (): void => {
+      activeLease?.release();
+      activeLease = null;
+    };
+    if (activeLease && upstreamResp.ok) poolFor(opts.auth)?.markSuccess(activeLease.accountId);
+    if (activeLease && !stream && upstreamResp.ok) {
+      const usage = await extractResponseUsage(upstreamResp.clone());
+      if (usage) poolFor(opts.auth)?.recordUsage(activeLease.accountId, usage);
+    }
   } catch (err) {
     return errorResponse(502, "upstream_unreachable", (err as Error).message);
   }
 
   if (!upstreamResp.ok) {
     const errText = await upstreamResp.text().catch(() => "");
+    releaseLease();
     return errorResponse(upstreamResp.status, "upstream_error", errText.slice(0, 500) || `upstream returned ${upstreamResp.status}`);
   }
 
@@ -214,6 +241,7 @@ export async function handleResponses(
     // downstream Responses translators already consume (SSE + batch)
     if (stream) {
       if (!upstreamResp.body) {
+        releaseLease();
         return errorResponse(502, "translation_failed", "upstream returned no body for stream");
       }
       upstreamResp = new Response(anthropicSseToOpenaiSse(upstreamResp.body, req.model), {
@@ -226,6 +254,7 @@ export async function handleResponses(
       try {
         parsedAnthropic = JSON.parse(rawAnthropic) as AnthropicMessagesResponse;
       } catch (err) {
+        releaseLease();
         return errorResponse(502, "translation_failed", `upstream returned non-JSON body: ${(err as Error).message}`);
       }
       const openaiResp = translateResponseAnthropicToOpenAI(parsedAnthropic, req.model);
@@ -241,7 +270,9 @@ export async function handleResponses(
   const meta = { customToolNames, namespaceMap, hasToolSearch };
 
   if (stream) {
-    return streamResponse(upstreamResp, { responseId, model: req.model, meta, request: req, input, options: opts });
+    return streamResponse(upstreamResp, { responseId, model: req.model, meta, request: req, input, options: opts, onComplete: releaseLease, onUsage: (usage) => {
+      if (activeLease) poolFor(opts.auth)?.recordUsage(activeLease.accountId, usage);
+    } });
   }
 
   const rawChatResp = await upstreamResp.text();
@@ -249,6 +280,7 @@ export async function handleResponses(
   try {
     chatRespJson = JSON.parse(rawChatResp);
   } catch (err) {
+    releaseLease();
     return errorResponse(502, "translation_failed", `upstream returned non-JSON body: ${(err as Error).message}`);
   }
   const responsesResp = chatCompletionsToResponses(chatRespJson, req.model, {
@@ -265,6 +297,7 @@ export async function handleResponses(
   }
 
   if (debug) console.log(`[responses] ← ${responsesResp.status} (${Date.now() - start}ms)`);
+  releaseLease();
 
   return new Response(JSON.stringify(responsesResp), {
     status: 200,
@@ -283,6 +316,8 @@ interface StreamResponseContext {
   request: ResponsesRequest;
   input: ResponsesInputItem[];
   options: ResponsesHandlerOptions;
+  onComplete?: () => void;
+  onUsage?: (usage: AccountUsage) => void;
 }
 
 function streamResponse(upstreamResp: Response, context: StreamResponseContext): Response {
@@ -295,6 +330,8 @@ function streamResponse(upstreamResp: Response, context: StreamResponseContext):
     async start(controller) {
       const encoder = new TextEncoder();
       const send = (evt: ResponsesStreamEvent) => controller.enqueue(encoder.encode(responsesEventToSse(evt)));
+      let inputTokens = 0;
+      let outputTokens = 0;
       try {
         const reader = upstreamResp.body!.getReader();
         const decoder = new TextDecoder();
@@ -314,6 +351,13 @@ function streamResponse(upstreamResp: Response, context: StreamResponseContext):
             if (!dataLine || dataLine === "[DONE]") continue;
             try {
               const chunk = JSON.parse(dataLine);
+              const usage = chunk.usage as Record<string, unknown> | undefined;
+              if (usage) {
+                const input = numericUsage(usage.prompt_tokens ?? usage.input_tokens);
+                const output = numericUsage(usage.completion_tokens ?? usage.output_tokens);
+                if (input !== undefined) inputTokens = Math.max(inputTokens, input);
+                if (output !== undefined) outputTokens = Math.max(outputTokens, output);
+              }
               for (const evt of chatChunkToResponsesEvents(chunk, state)) send(evt);
             } catch (err) {
               errored = true;
@@ -331,6 +375,9 @@ function streamResponse(upstreamResp: Response, context: StreamResponseContext):
         try { controller.close(); } catch {}
       } catch (err) {
         try { controller.error(err); } catch {}
+      } finally {
+        if (inputTokens > 0 || outputTokens > 0) context.onUsage?.({ inputTokens, outputTokens });
+        context.onComplete?.();
       }
     },
     cancel(reason) {
@@ -347,6 +394,24 @@ function streamResponse(upstreamResp: Response, context: StreamResponseContext):
       connection: "keep-alive",
     },
   });
+}
+
+async function extractResponseUsage(response: Response): Promise<AccountUsage | null> {
+  try {
+    const value = await response.json() as { usage?: Record<string, unknown> };
+    const usage = value.usage;
+    if (!usage) return null;
+    const inputTokens = numericUsage(usage.input_tokens ?? usage.prompt_tokens);
+    const outputTokens = numericUsage(usage.output_tokens ?? usage.completion_tokens);
+    if (inputTokens === undefined && outputTokens === undefined) return null;
+    return { ...(inputTokens !== undefined ? { inputTokens } : {}), ...(outputTokens !== undefined ? { outputTokens } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+function numericUsage(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function extractSseData(frame: string): string | null {
@@ -368,6 +433,21 @@ function resolveProviderDef(config: ProxyConfig): ProviderDef & { openaiBaseURL:
     anthropicBaseURL: endpoints.anthropicBase,
     openaiBaseURL: endpoints.openaiBase,
   };
+}
+
+async function acquireResponsesLease(auth: AuthManager, provider: ProxyConfig["provider"]): Promise<AccountLease> {
+  if (typeof auth.acquireCredential === "function") return auth.acquireCredential(provider);
+  const credential = await auth.getCredential();
+  return {
+    accountId: "static-" + provider,
+    provider,
+    credential,
+    release: () => undefined,
+  };
+}
+
+function poolFor(auth: AuthManager) {
+  return typeof auth.getPool === "function" ? auth.getPool() : null;
 }
 
 /**

@@ -18,6 +18,11 @@ export type AccountFailureClass =
   | "upstream"
   | "client";
 
+export interface AccountUsage {
+  inputTokens?: number;
+  outputTokens?: number;
+}
+
 export interface AccountPoolInput {
   id: string;
   provider: ProviderId;
@@ -43,6 +48,11 @@ export interface AccountSnapshot {
   lastFailureAt?: number;
   lastErrorClass?: AccountFailureClass;
   lastError?: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    updatedAt?: number;
+  };
 }
 
 export interface AccountLease {

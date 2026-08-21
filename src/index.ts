@@ -5,6 +5,9 @@
 import { loadConfig } from "./config/loader.js";
 import { EXAMPLE_CONFIG_YAML } from "./config/template.js";
 import { AuthManager } from "./auth/manager.js";
+import { AccountPool } from "./auth/pool.js";
+import { AccountStore } from "./auth/account-store.js";
+import { createApiKeyCredential } from "./auth/apikey.js";
 import { startServer, type ProxyServer } from "./server/server.js";
 import { startControlListener, LogBuffer, type ControlState } from "./android/control.js";
 import { ResponseStore } from "./responses/store.js";
@@ -17,7 +20,7 @@ import type { ProxyConfig } from "./config/types.js";
 import { parse, stringify } from "yaml";
 import { spawn } from "node:child_process";
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { ensureNodeFetchNoTimeouts } from "./runtime/node-fetch-compat.js";
@@ -118,24 +121,39 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
   }
   const config = loadConfig(path);
 
+  const poolRuntime = createPoolRuntime(config);
+
   const auth = new AuthManager({
     mode: config.auth.mode,
     provider: config.provider,
     apiKey: config.auth.apiKey ?? config.providers[config.provider].credential,
+    ...(poolRuntime ? { pool: poolRuntime.pool } : {}),
   });
 
+  let oauthCredential: Credential | null = null;
   if (config.auth.mode === "oauth") {
     const cred = await loadCredential();
     if (!cred) {
       console.error("Not logged in. Run: zcode-proxy auth login " + config.provider);
       process.exit(1);
     }
+    oauthCredential = cred;
     auth.setOAuthCredential(cred);
+  }
+
+  if (poolRuntime && poolRuntime.pool.list().length === 0) {
+    const configuredKey = config.auth.apiKey ?? config.providers[config.provider].credential;
+    const usableKey = configuredKey && !/^YOUR_API_KEY_HERE$/i.test(configuredKey.trim()) ? configuredKey : null;
+    const credential = oauthCredential ?? (usableKey ? createApiKeyCredential(config.provider, usableKey) : null);
+    if (credential) {
+      poolRuntime.pool.add({ id: config.provider + "-default", provider: config.provider, credential, mode: config.auth.mode });
+      poolRuntime.store.save(poolRuntime.pool);
+    }
   }
 
   if (debug) printDebugBanner(config, path);
 
-  const server = await startServer(buildServerOptions(config, auth, debug));
+  const server = await startServer(buildServerOptions(config, auth, debug, poolRuntime ? () => poolRuntime.store.save(poolRuntime.pool) : undefined));
   const url = `http://${server.hostname}:${server.port}`;
   console.log(`zcode-proxy listening on ${url}`);
   console.log(`  provider: ${config.provider}`);
@@ -155,12 +173,32 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
 }
 
 /** Build `startServer` options, wiring the Responses store and MCP pool when their config gates are on. */
-function buildServerOptions(config: ProxyConfig, auth: AuthManager, debug: boolean): { config: ProxyConfig; auth: AuthManager; debug: boolean; responseStore?: ResponseStore } {
-  const opts: { config: ProxyConfig; auth: AuthManager; debug: boolean; responseStore?: ResponseStore } = { config, auth, debug };
+function buildServerOptions(config: ProxyConfig, auth: AuthManager, debug: boolean, onPoolChanged?: () => void): { config: ProxyConfig; auth: AuthManager; debug: boolean; responseStore?: ResponseStore; onPoolChanged?: () => void } {
+  const opts: { config: ProxyConfig; auth: AuthManager; debug: boolean; responseStore?: ResponseStore; onPoolChanged?: () => void } = { config, auth, debug, ...(onPoolChanged ? { onPoolChanged } : {}) };
   if (config.responses.enabled) {
     opts.responseStore = new ResponseStore({ maxEntries: config.responses.storeMaxEntries, ttlMs: config.responses.storeTtlMs });
   }
   return opts;
+}
+
+interface PoolRuntime {
+  pool: AccountPool;
+  store: AccountStore;
+}
+
+function createPoolRuntime(config: ProxyConfig): PoolRuntime | null {
+  const control = config.control;
+  if (!control?.enabled || !control.adminKey) return null;
+  const pool = new AccountPool({
+    coolingSeconds: control.coolingSeconds,
+    maxConcurrencyPerAccount: control.maxConcurrencyPerAccount,
+  });
+  const store = new AccountStore({
+    path: resolve(process.cwd(), control.accountStorePath ?? "data/accounts.enc.json"),
+    secret: control.adminKey,
+  });
+  store.load(pool);
+  return { pool, store };
 }
 
 /**

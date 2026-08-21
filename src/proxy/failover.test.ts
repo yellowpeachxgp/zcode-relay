@@ -97,7 +97,7 @@ describe("proxyRequest 账号池接入", () => {
           seenKeys.push(upstreamRequest.headers.get("x-api-key") ?? "");
           call += 1;
           if (call === 1) return new Response("rate limited", { status: 429 });
-          return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+          return new Response(JSON.stringify({ usage: { input_tokens: 7, output_tokens: 3 } }), { status: 200, headers: { "content-type": "application/json" } });
         }) as typeof fetch,
         endpointRouting: null,
         clientSigning: null,
@@ -108,5 +108,6 @@ describe("proxyRequest 账号池接入", () => {
     expect(seenKeys).toEqual(["key-1", "key-2"]);
     expect(pool.snapshot("zai-1")?.status).toBe("cooling");
     expect(pool.snapshot("zai-2")?.requestCount).toBe(1);
+    expect(pool.snapshot("zai-2")?.usage).toEqual({ inputTokens: 7, outputTokens: 3, updatedAt: expect.any(Number) });
   });
 });

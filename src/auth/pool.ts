@@ -5,6 +5,7 @@ import type {
   AccountPoolInput,
   AccountSnapshot,
   AccountStatus,
+  AccountUsage,
 } from "./pool-types.js";
 import type { ProviderId } from "../provider/types.js";
 
@@ -26,6 +27,11 @@ interface AccountRecord {
   lastFailureAt?: number;
   lastErrorClass?: AccountFailureClass;
   lastError?: string;
+  usage: {
+    inputTokens: number;
+    outputTokens: number;
+    updatedAt?: number;
+  };
 }
 
 export interface AccountPoolOptions {
@@ -65,6 +71,7 @@ export class AccountPool {
       maxConcurrency: normalizeConcurrency(input.maxConcurrency ?? this.maxConcurrencyPerAccount),
       requestCount: 0,
       failureCount: 0,
+      usage: { inputTokens: 0, outputTokens: 0 },
     };
     this.accounts.set(record.id, record);
     return this.toSnapshot(record);
@@ -76,9 +83,46 @@ export class AccountPool {
       .map((account) => this.toSnapshot(account));
   }
 
+  /** Export inputs for the encrypted core store; never use this in HTTP responses. */
+  exportInputs(): AccountPoolInput[] {
+    return [...this.accounts.values()].map((account) => ({
+      id: account.id,
+      provider: account.provider,
+      credential: { ...account.credential },
+      mode: account.mode,
+      enabled: account.enabled,
+      maxConcurrency: account.maxConcurrency,
+    }));
+  }
+
   snapshot(id: string): AccountSnapshot | null {
     const account = this.accounts.get(id);
     return account ? this.toSnapshot(account) : null;
+  }
+
+  findByCredential(provider: ProviderId, credential: Credential): AccountSnapshot | null {
+    const value = credentialString(credential);
+    for (const account of this.accounts.values()) {
+      if (account.provider === provider && credentialString(account.credential) === value) return this.toSnapshot(account);
+    }
+    return null;
+  }
+
+  update(id: string, changes: { credential?: Credential; mode?: AuthMode; enabled?: boolean; maxConcurrency?: number }): AccountSnapshot | null {
+    const account = this.accounts.get(id);
+    if (!account) return null;
+    if (changes.credential && changes.credential.provider !== account.provider) {
+      throw new Error("credential provider mismatch for account: " + id);
+    }
+    if (changes.credential) account.credential = changes.credential;
+    if (changes.mode) account.mode = changes.mode;
+    if (changes.maxConcurrency !== undefined) account.maxConcurrency = normalizeConcurrency(changes.maxConcurrency);
+    if (changes.enabled !== undefined) {
+      account.enabled = changes.enabled;
+      account.status = changes.enabled ? "active" : "disabled";
+      account.coolingUntil = undefined;
+    }
+    return this.toSnapshot(account);
   }
 
   remove(id: string): boolean {
@@ -131,6 +175,15 @@ export class AccountPool {
     account.lastError = undefined;
     account.coolingUntil = undefined;
     account.status = account.enabled ? "active" : "disabled";
+    return this.toSnapshot(account);
+  }
+
+  recordUsage(id: string, usage: AccountUsage): AccountSnapshot | null {
+    const account = this.accounts.get(id);
+    if (!account) return null;
+    if (Number.isFinite(usage.inputTokens) && (usage.inputTokens ?? 0) >= 0) account.usage.inputTokens += usage.inputTokens ?? 0;
+    if (Number.isFinite(usage.outputTokens) && (usage.outputTokens ?? 0) >= 0) account.usage.outputTokens += usage.outputTokens ?? 0;
+    account.usage.updatedAt = this.now();
     return this.toSnapshot(account);
   }
 
@@ -204,6 +257,7 @@ export class AccountPool {
       lastFailureAt: account.lastFailureAt,
       lastErrorClass: account.lastErrorClass,
       lastError: account.lastError,
+      usage: { ...account.usage },
     };
   }
 }
