@@ -8,5 +8,12 @@
 - 决策：核心拥有账号池和运行状态，面板只通过内部控制 API 管理。
 - 约束：主线程完成全部工作，不使用 subagent。
 - 证据：git log --graph、git remote -v、git status --short --branch。
-- 未完成：账号池、故障转移、控制 API、面板适配和全量验证。
+- 未完成：故障转移、控制 API、面板适配和全量验证。
 
+## 2026-08-22：完成核心账号池最小状态机
+
+- 修改：新增 src/auth/pool-types.ts 和 src/auth/pool.ts。
+- 行为：按 provider round-robin，支持租约、最大并发、禁用、冷却、额度耗尽、认证失效和 challenge 状态。
+- 安全：账号快照只返回 credentialMasked，测试确认完整假凭据不会出现在 JSON。
+- 验证：bun test src/auth/pool.test.ts，4 pass、0 fail。
+- 未完成：AuthManager 接入、请求故障转移、控制 API、面板适配和全量验证。
