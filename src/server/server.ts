@@ -20,6 +20,7 @@ import { errorResponse } from "../proxy/handler.js";
 import type { ResponseStore } from "../responses/store.js";
 import { handleInternalRoute } from "./internal-routes.js";
 import type { QuotaMonitor } from "../auth/quota.js";
+import type { OAuthManager } from "../auth/oauth-manager.js";
 
 interface ServerOptions {
   config: ProxyConfig;
@@ -34,6 +35,8 @@ interface ServerOptions {
   onPoolChanged?: () => void;
   /** Quota checker owned by the core runtime. */
   quotaMonitor?: QuotaMonitor;
+  /** Core-owned OAuth coordinator for the control listener. */
+  oauthManager?: OAuthManager;
   /** Keep internal routes available for direct handler tests; startServer disables them on public listener. */
   exposeInternal?: boolean;
 }
@@ -91,6 +94,7 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
         auth,
         onPoolChanged: opts.onPoolChanged,
         onQuotaCheck: opts.quotaMonitor ? (id) => id ? opts.quotaMonitor!.checkAccount(id) : opts.quotaMonitor!.checkAll() : undefined,
+        oauthManager: opts.oauthManager,
       })) ?? errorResponse(404, "not_found_error", `No route for ${method} ${path}`);
     }
 
@@ -165,9 +169,11 @@ export function startServer(opts: ServerOptions): Promise<ProxyServer> {
     const close = (): Promise<void> => {
       if (!closePromise) {
         opts.quotaMonitor?.stop();
+        const oauthClose = opts.oauthManager?.close() ?? Promise.resolve();
         closePromise = Promise.all([
           publicServer.close(),
           controlServer?.close() ?? Promise.resolve(),
+          oauthClose,
         ]).then(() => undefined);
       }
       return closePromise;
@@ -198,6 +204,7 @@ export function createControlFetchHandler(opts: ServerOptions): (req: Request) =
         auth: opts.auth,
         onPoolChanged: opts.onPoolChanged,
         onQuotaCheck: opts.quotaMonitor ? (id) => id ? opts.quotaMonitor!.checkAccount(id) : opts.quotaMonitor!.checkAll() : undefined,
+        oauthManager: opts.oauthManager,
       })) ?? errorResponse(404, "not_found_error", `No route for ${req.method} ${url.pathname}`);
     }
     return errorResponse(404, "not_found_error", `No route for ${req.method} ${url.pathname}`);

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Body, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 
 from .. import settings
 from ..auth_admin import verify_admin_key
@@ -16,6 +16,7 @@ from ..quota import fetch_quota, refresh_accounts
 from ..store import store
 
 router = APIRouter(prefix="/admin/api", dependencies=[Depends(verify_admin_key)])
+oauth_callback_router = APIRouter(prefix="/admin/api")
 
 # 进行中的 OAuth 登录流程（flow_id -> ZaiAuthFlow），需跨请求保留 poll_token
 _login_flows: dict[str, ZaiAuthFlow] = {}
@@ -197,8 +198,10 @@ async def refresh_one(account_id: str):
 @router.post("/login/start")
 async def login_start():
     """发起 Z.AI OAuth，返回授权链接供前端展示。"""
-    if _core():
-        raise HTTPException(409, "核心模式请通过核心控制面接入 OAuth，面板不保存第二套账号池")
+    core = _core()
+    if core:
+        result = await _call_core(core.oauth_start("zai", settings.CORE_OAUTH_REDIRECT_URI))
+        return {"flow_id": result["flowId"], "authorize_url": result["authorizeUrl"], "status": "pending"}
     flow = ZaiAuthFlow()
     try:
         flow_id, authorize_url = await flow.init()
@@ -211,6 +214,9 @@ async def login_start():
 @router.get("/login/poll/{flow_id}")
 async def login_poll(flow_id: str):
     """轮询授权状态；成功后自动兑换凭证并加入账号池。"""
+    core = _core()
+    if core:
+        return await _call_core(core.oauth_status(flow_id))
     flow = _login_flows.get(flow_id)
     if not flow:
         raise HTTPException(404, "登录会话不存在或已过期")
@@ -250,6 +256,24 @@ async def login_poll(flow_id: str):
     if account.mode == "jwt":
         await refresh_accounts([account])
     return {"status": "ready", "account": account.public_view()}
+
+
+@oauth_callback_router.get("/login/callback/{flow_id}", include_in_schema=False)
+async def oauth_callback(flow_id: str, request: Request):
+    """OAuth 提供商回调中继：浏览器回调到面板，再由面板转发给核心。"""
+    if not settings.CORE_ENABLED:
+        return HTMLResponse("OAuth core relay is disabled.", status_code=404)
+    code = request.query_params.get("authCode") or request.query_params.get("code") or ""
+    state = request.query_params.get("state") or ""
+    if not code or not state:
+        return HTMLResponse("授权回调缺少 code 或 state，请关闭页面并重试。", status_code=400)
+    try:
+        result = await _call_core(_core().oauth_callback(flow_id, code, state))
+    except HTTPException as error:
+        return HTMLResponse("核心 OAuth 处理失败：" + str(error.detail), status_code=502)
+    if result.get("status") == "ready":
+        return HTMLResponse("授权成功，账号已进入核心账号池。可以关闭此页面并返回控制面板。")
+    return HTMLResponse("授权未完成：" + str(result.get("error") or result.get("status") or "unknown"), status_code=400)
 
 
 # ── 设置 ─────────────────────────────────────────────────────────────────────

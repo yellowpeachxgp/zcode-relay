@@ -129,6 +129,15 @@ class CoreClient:
         accounts = result.get("accounts") if isinstance(result.get("accounts"), list) else []
         return {**result, "summary": {"ok": len(accounts), "fail": 0}, "count": len(accounts)}
 
+    async def oauth_start(self, provider: str, redirect_uri: str) -> dict[str, Any]:
+        return await self._json_request("POST", "/internal/oauth/start", json={"provider": provider, "redirectUri": redirect_uri})
+
+    async def oauth_status(self, flow_id: str) -> dict[str, Any]:
+        return await self._json_request("GET", f"/internal/oauth/status/{flow_id}")
+
+    async def oauth_callback(self, flow_id: str, code: str, state: str) -> dict[str, Any]:
+        return await self._json_request("POST", f"/internal/oauth/callback/{flow_id}", json={"code": code, "state": state})
+
     async def status(self) -> dict[str, Any]:
         runtime = await self.runtime()
         pool = runtime.get("pool") or {}

@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { AccountPool } from "../auth/pool.js";
 import { AuthManager } from "../auth/manager.js";
 import { handleInternalRoute } from "./internal-routes.js";
+import { OAuthManager } from "../auth/oauth-manager.js";
 import type { ProxyConfig } from "../config/types.js";
 
 function makeConfig(): ProxyConfig {
@@ -100,5 +101,36 @@ describe("internal control routes", () => {
     const usage = await handleInternalRoute(request("/internal/usage/summary", { headers }), result);
     expect((await runtime?.json()).pool.total).toBe(1);
     expect((await usage?.json()).totalRequests).toBe(1);
+  });
+
+  it("exposes OAuth start, callback and status through the protected control contract", async () => {
+    const pool = new AccountPool();
+    const result = auth(pool);
+    const oauth = new OAuthManager(pool, {
+      clientFactory: () => ({
+        startWithCallback: (callbackUrl: string) => ({ authorizeUrl: "https://chat.z.ai/authorize", callbackUrl, state: "state-1" }),
+        acceptCallback: (code: string, state: string) => ({ code, state }),
+        exchangeCode: async () => ({ accessToken: "oauth-access" }),
+        close: async () => undefined,
+      }),
+      resolveCredential: async () => ({ apiKey: "oauth-key", provider: "zai" }),
+    });
+    const headers = { authorization: "control-secret", "content-type": "application/json" };
+    const start = await handleInternalRoute(request("/internal/oauth/start", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ provider: "zai", redirectUri: "http://panel/admin/api/login/callback" }),
+    }), { ...result, oauthManager: oauth });
+    const started = await start?.json();
+    expect(start?.status).toBe(200);
+    expect(started.authorizeUrl).toContain("chat.z.ai");
+
+    const callback = await handleInternalRoute(request(`/internal/oauth/callback/${started.flowId}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ code: "auth-code", state: "state-1" }),
+    }), { ...result, oauthManager: oauth });
+    expect((await callback?.json()).status).toBe("ready");
+    expect(pool.list()).toHaveLength(1);
   });
 });

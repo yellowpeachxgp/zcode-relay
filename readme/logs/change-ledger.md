@@ -64,6 +64,13 @@
 - 修改：Compose 核心服务默认注入 `ZCODE_QUOTA_ENABLED=true`、60 秒周期和 10 秒超时；本地演示环境仍关闭巡检，避免无真实账号时产生外部请求。
 - 推送：提交 `8085cf5` 已推送到 `origin/master`。
 
+## 2026-08-22：修复核心模式 OAuth 登录断链
+
+- 根因：面板核心模式主动返回 409；面板 OAuth 仍使用已被上游移除的 `/oauth/cli/init` 与 `/oauth/cli/poll`；核心新 auth-code OAuth 没有控制面接入。
+- 修改：新增核心 `OAuthManager` 和 `/internal/oauth/start`、`/internal/oauth/callback/:id`、`/internal/oauth/status/:id`；面板增加无鉴权 provider callback relay，但实际状态和凭据只由核心处理。
+- 安全：access token、JWT、API Key 不出现在面板响应、浏览器回调页或日志中；成功只返回脱敏账号快照。
+- 验证：OAuth 客户端、OAuthManager、内部控制 API、面板客户端和 TypeScript 回归均通过；真实 provider 授权需用户在浏览器完成，未使用生产凭据代跑。
+
 ## 2026-08-22：阶段 1 验证报告与远程对账
 
 - 产物：新增 `readme/analysis/2026-08-22-phase1-verification.md`，记录范围、命令、结果、安全检查和已知边界。

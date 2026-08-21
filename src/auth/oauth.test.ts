@@ -19,6 +19,20 @@ function envelope(data: Record<string, unknown>): string {
 }
 
 describe("ZaiOAuthClient (auth-code flow)", () => {
+  it("supports an external callback relay without binding a core-local server", async () => {
+    const client = new ZaiOAuthClient();
+    const started = client.startWithCallback("http://127.0.0.1:3300/admin/api/login/callback/flow-1");
+
+    expect(started.callbackUrl).toBe("http://127.0.0.1:3300/admin/api/login/callback/flow-1");
+    expect(started.authorizeUrl).toContain("chat.z.ai/api/oauth/authorize");
+    expect(started.authorizeUrl).toContain("redirect_uri=http%3A%2F%2F127.0.0.1%3A3300");
+
+    const callback = client.acceptCallback("auth-code", started.state);
+    expect(callback).toEqual({ code: "auth-code", state: started.state });
+    await expect(client.waitForCallback(100)).resolves.toBe("auth-code");
+    await client.close();
+  });
+
   it("buildAuthorizeUrl targets chat.z.ai with standard OAuth2 params (response_type/client_id/redirect_uri)", async () => {
     const client = new ZaiOAuthClient();
     const { authorizeUrl } = await client.start();

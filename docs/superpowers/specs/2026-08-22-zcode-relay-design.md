@@ -134,6 +134,8 @@ ZCODE_CORE_URL 和 ZCODE_CORE_ADMIN_KEY 连接核心。面板的账号、状态�
 
 当核心连接不可用时，面板必须显示“核心不可用”，不能悄悄回退到本地账号池继续对外提供流量。
 
+OAuth 约束：OAuth auth-code、token exchange、Coding Plan API Key 解析和账号池写入全部由核心完成。面板只保存 flow id，承接 provider 回调后转发 `code/state` 到核心；access token、JWT 和 API Key 不经过面板响应，也不写入面板 SQLite。
+
 ## 持久化与安全
 
 - 核心使用本地 AES-GCM 加密文件存储，账号凭据由控制密钥派生加密密钥；运行期状态保存在 AccountPool，凭据和启停状态在管理变更时持久化。

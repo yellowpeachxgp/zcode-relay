@@ -52,6 +52,7 @@ def create_app() -> FastAPI:
     app.mount("/static", StaticFiles(directory=str(settings.STATIC_DIR)), name="static")
 
     app.include_router(pages.router)
+    app.include_router(admin_api.oauth_callback_router)
     app.include_router(admin_api.router)
     app.include_router(gateway.router)
     return app

@@ -10,6 +10,7 @@
 - 内部控制 API：独立管理密钥、账号增删改、启用/禁用、运行摘要、用量摘要、重复凭据幂等和脱敏。
 - AES-GCM 加密账号存储：核心启动恢复账号，管理变更后保存，文件权限 0600。
 - zcode2api 核心模式：账号管理、模型查询和 `/v1/messages` 流量通过核心；核心不可用明确返回 503，不回退到面板本地池。
+- 核心 OAuth：auth-code 授权、回调中继、token exchange、KeyResolver 和账号池写入由核心统一完成；面板只保留 flow id。
 - Compose：核心与面板服务、数据卷、健康检查、环境变量密钥注入和网络编排。
 
 ## 验证证据
@@ -47,6 +48,7 @@
 
 - `bun test` 在加入 quota monitor 和独立 listener 后为 530 pass、0 fail，37 个测试文件。
 - 独立 listener 回归确认：控制端口带管理密钥返回 200，公开端口访问 `/internal/health` 返回 404。
+- OAuth 控制合同回归确认：`start → callback → status` 完成后生成脱敏账号快照，错误 state 不会写入账号池。
 
 ## 发布对账
 

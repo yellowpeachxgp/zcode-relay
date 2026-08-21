@@ -71,6 +71,7 @@ CORE_CONTROL_URL = (os.getenv("ZCODE_CORE_CONTROL_URL", CORE_URL) or CORE_URL).r
 CORE_ADMIN_KEY = os.getenv("ZCODE_CORE_ADMIN_KEY", "")
 CORE_PROXY_KEY = os.getenv("ZCODE_CORE_PROXY_KEY", "")
 CORE_TIMEOUT = float(os.getenv("ZCODE_CORE_TIMEOUT", "10"))
+CORE_OAUTH_REDIRECT_URI = os.getenv("ZCODE_CORE_OAUTH_REDIRECT_URI", f"http://127.0.0.1:{PORT}/admin/api/login/callback")
 GATEWAY_KEY = os.getenv("ZCODE_GATEWAY_KEY", "")
 
 # ── 用量监控 ─────────────────────────────────────────────────────────────────

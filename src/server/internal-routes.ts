@@ -5,12 +5,14 @@ import { createApiKeyCredential } from "../auth/apikey.js";
 import type { AuthManager } from "../auth/manager.js";
 import type { AccountPool } from "../auth/pool.js";
 import type { AccountStatus } from "../auth/pool-types.js";
+import type { OAuthManager } from "../auth/oauth-manager.js";
 
 export interface InternalRouteOptions {
   config: ProxyConfig;
   auth: AuthManager;
   onPoolChanged?: () => void;
   onQuotaCheck?: (accountId?: string) => Promise<unknown>;
+  oauthManager?: OAuthManager;
 }
 
 /** Handle /internal/* routes. Returns null for paths outside the control API. */
@@ -29,6 +31,40 @@ export async function handleInternalRoute(req: Request, opts: InternalRouteOptio
   const path = url.pathname;
   if (req.method === "GET" && path === "/internal/health") {
     return json({ status: "ok", service: "zcode-relay-core", provider: opts.config.provider });
+  }
+  if (req.method === "POST" && path === "/internal/oauth/start") {
+    if (!opts.oauthManager) return jsonError(503, "oauth_unavailable", "OAuth manager is not configured");
+    const body = await readObject(req);
+    if (!body.ok) return body.response;
+    const provider = body.value.provider;
+    const redirectUri = body.value.redirectUri;
+    if (provider !== "zai" && provider !== "bigmodel") return jsonError(400, "invalid_request_error", "provider must be zai or bigmodel");
+    if (typeof redirectUri !== "string" || !redirectUri.trim()) return jsonError(400, "invalid_request_error", "redirectUri is required");
+    try {
+      return json(await opts.oauthManager.start(provider, redirectUri));
+    } catch (error) {
+      return jsonError(400, "oauth_start_failed", (error as Error).message);
+    }
+  }
+  const oauthStatusMatch = path.match(/^\/internal\/oauth\/status\/([^/]+)$/);
+  if (req.method === "GET" && oauthStatusMatch) {
+    if (!opts.oauthManager) return jsonError(503, "oauth_unavailable", "OAuth manager is not configured");
+    const status = opts.oauthManager.status(decodeURIComponent(oauthStatusMatch[1]));
+    return status ? json(status) : jsonError(404, "not_found_error", "OAuth flow not found");
+  }
+  const oauthCallbackMatch = path.match(/^\/internal\/oauth\/callback\/([^/]+)$/);
+  if (req.method === "POST" && oauthCallbackMatch) {
+    if (!opts.oauthManager) return jsonError(503, "oauth_unavailable", "OAuth manager is not configured");
+    const body = await readObject(req);
+    if (!body.ok) return body.response;
+    const code = typeof body.value.code === "string" ? body.value.code : body.value.authCode;
+    const state = body.value.state;
+    if (typeof code !== "string" || typeof state !== "string") return jsonError(400, "invalid_request_error", "code and state are required");
+    try {
+      return json(await opts.oauthManager.callback(decodeURIComponent(oauthCallbackMatch[1]), code, state));
+    } catch (error) {
+      return jsonError(404, "not_found_error", (error as Error).message);
+    }
   }
   if (req.method === "GET" && path === "/internal/runtime") {
     return json(runtimeSummary(pool, opts.config));

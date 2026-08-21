@@ -98,6 +98,7 @@ export abstract class AuthCodeOAuthClient {
   private server: Server | null = null;
   private callbackResult: { code: string; error: string | null } | null = null;
   private callbackWaiters: Array<(result: { code: string; error: string | null }) => void> = [];
+  private activeState: string | null = null;
 
   constructor(
     protected readonly config: AuthCodeConfig,
@@ -122,6 +123,27 @@ export abstract class AuthCodeOAuthClient {
     return `${this.config.authorizeUrl}?${params.toString()}`;
   }
 
+  /** Build an auth-code URL when a trusted external callback relay owns the callback route. */
+  startWithCallback(callbackUrl: string): { authorizeUrl: string; callbackUrl: string; state: string } {
+    const state = randomBytes(32).toString("hex");
+    this.activeState = state;
+    this.callbackResult = null;
+    return { authorizeUrl: this.buildAuthorizeUrl(callbackUrl, state), callbackUrl, state };
+  }
+
+  /** Accept a callback received by a trusted relay and wake waiters safely. */
+  acceptCallback(code: string, state: string): { code: string; state: string } {
+    if (!this.activeState || state !== this.activeState || !code) {
+      const error = "OAuth callback state mismatch or missing code.";
+      this.callbackResult = { code: "", error };
+      this.callbackWaiters.forEach((fn) => fn(this.callbackResult!));
+      throw new Error(error);
+    }
+    this.callbackResult = { code, error: null };
+    this.callbackWaiters.forEach((fn) => fn(this.callbackResult!));
+    return { code, state };
+  }
+
   /**
    * Start the localhost callback server and return the authorize URL.
    * Call `waitForCallback()` (or `authorize()`) afterwards, then `close()`.
@@ -133,6 +155,8 @@ export abstract class AuthCodeOAuthClient {
    */
   start(): Promise<{ authorizeUrl: string; callbackUrl: string; state: string }> {
     const state = randomBytes(32).toString("hex");
+    this.activeState = state;
+    this.callbackResult = null;
     const requestedPort = Number(process.env.ZCODE_OAUTH_CALLBACK_PORT ?? 0) || 0;
 
     return new Promise((resolve, reject) => {

@@ -9,6 +9,7 @@ import { AccountPool } from "./auth/pool.js";
 import { AccountStore } from "./auth/account-store.js";
 import { createApiKeyCredential } from "./auth/apikey.js";
 import { QuotaMonitor } from "./auth/quota.js";
+import { OAuthManager } from "./auth/oauth-manager.js";
 import { startServer, type ProxyServer } from "./server/server.js";
 import { startControlListener, LogBuffer, type ControlState } from "./android/control.js";
 import { ResponseStore } from "./responses/store.js";
@@ -152,11 +153,13 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
     }
   }
 
+  const persistPool = poolRuntime ? () => poolRuntime.store.save(poolRuntime.pool) : undefined;
   const quotaMonitor = poolRuntime && config.quota ? new QuotaMonitor(poolRuntime.pool, config.quota) : undefined;
+  const oauthManager = poolRuntime ? new OAuthManager(poolRuntime.pool, { onPoolChanged: persistPool }) : undefined;
 
   if (debug) printDebugBanner(config, path);
 
-  const server = await startServer(buildServerOptions(config, auth, debug, poolRuntime ? () => poolRuntime.store.save(poolRuntime.pool) : undefined, quotaMonitor));
+  const server = await startServer(buildServerOptions(config, auth, debug, persistPool, quotaMonitor, oauthManager));
   const url = `http://${server.hostname}:${server.port}`;
   console.log(`zcode-proxy listening on ${url}`);
   console.log(`  provider: ${config.provider}`);
@@ -178,8 +181,8 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
 }
 
 /** Build `startServer` options, wiring the Responses store and MCP pool when their config gates are on. */
-function buildServerOptions(config: ProxyConfig, auth: AuthManager, debug: boolean, onPoolChanged?: () => void, quotaMonitor?: QuotaMonitor): { config: ProxyConfig; auth: AuthManager; debug: boolean; responseStore?: ResponseStore; onPoolChanged?: () => void; quotaMonitor?: QuotaMonitor } {
-  const opts: { config: ProxyConfig; auth: AuthManager; debug: boolean; responseStore?: ResponseStore; onPoolChanged?: () => void; quotaMonitor?: QuotaMonitor } = { config, auth, debug, ...(onPoolChanged ? { onPoolChanged } : {}), ...(quotaMonitor ? { quotaMonitor } : {}) };
+function buildServerOptions(config: ProxyConfig, auth: AuthManager, debug: boolean, onPoolChanged?: () => void, quotaMonitor?: QuotaMonitor, oauthManager?: OAuthManager): { config: ProxyConfig; auth: AuthManager; debug: boolean; responseStore?: ResponseStore; onPoolChanged?: () => void; quotaMonitor?: QuotaMonitor; oauthManager?: OAuthManager } {
+  const opts: { config: ProxyConfig; auth: AuthManager; debug: boolean; responseStore?: ResponseStore; onPoolChanged?: () => void; quotaMonitor?: QuotaMonitor; oauthManager?: OAuthManager } = { config, auth, debug, ...(onPoolChanged ? { onPoolChanged } : {}), ...(quotaMonitor ? { quotaMonitor } : {}), ...(oauthManager ? { oauthManager } : {}) };
   if (config.responses.enabled) {
     opts.responseStore = new ResponseStore({ maxEntries: config.responses.storeMaxEntries, ttlMs: config.responses.storeTtlMs });
   }

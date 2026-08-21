@@ -48,6 +48,7 @@ services:
       ZCODE_CORE_ENABLED: "true"
       ZCODE_CORE_URL: http://core:8080
       ZCODE_CORE_CONTROL_URL: http://core:8091
+      ZCODE_CORE_OAUTH_REDIRECT_URI: http://localhost:3000/admin/api/login/callback
       ZCODE_CORE_ADMIN_KEY: "${ZCODE_CORE_ADMIN_KEY:?请设置 ZCODE_CORE_ADMIN_KEY}"
       ZCODE_CORE_PROXY_KEY: "${ZCODE_CORE_PROXY_KEY:?请设置 ZCODE_CORE_PROXY_KEY}"
       ZCODE_CORE_TIMEOUT: "10"
