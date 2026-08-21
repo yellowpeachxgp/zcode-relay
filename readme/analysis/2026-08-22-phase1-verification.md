@@ -38,10 +38,15 @@
 
 ## 已知边界
 
-- provider quota/余额探测和周期刷新属于下一阶段；当前用量检测包含请求数、失败数和响应 token 累计。
-- 阶段 1 的控制 API 与公开服务复用核心 listener，通过 `/internal/*` 和私有 Compose 网络隔离；独立控制 listener 后续再拆分。
+- provider quota/余额探测和周期刷新已实现为可配置的 `QuotaMonitor`；未配置 endpoint 的 provider 保持 `unknown`，不会伪造额度。
+- 控制 API 已绑定独立 listener；公开 listener 不暴露 `/internal/*`，Compose 中控制端口仅在服务网络内可达。
 - 未使用真实上游账号执行测试，真实凭据不得进入 CI、日志或仓库。
 - GitHub 对上游已有的 `Android-APP/.../libnode.so` 大文件给出 50 MB 建议警告，本次未改动该上游资产。
+
+## 追加验证
+
+- `bun test` 在加入 quota monitor 和独立 listener 后为 530 pass、0 fail，37 个测试文件。
+- 独立 listener 回归确认：控制端口带管理密钥返回 200，公开端口访问 `/internal/health` 返回 404。
 
 ## 发布对账
 

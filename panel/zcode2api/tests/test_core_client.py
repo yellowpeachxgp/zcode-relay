@@ -13,6 +13,7 @@ async def test_list_accounts_uses_core_key_and_maps_snapshot():
 
     async def handler(request: httpx.Request) -> httpx.Response:
         seen["authorization"] = request.headers.get("authorization")
+        seen["port"] = request.url.port
         return httpx.Response(200, json={
             "accounts": [{
                 "id": "zai-1", "provider": "zai", "mode": "apikey",
@@ -22,10 +23,11 @@ async def test_list_accounts_uses_core_key_and_maps_snapshot():
             "total": 1,
         })
 
-    client = CoreClient("http://core", "admin-secret", transport=httpx.MockTransport(handler))
+    client = CoreClient("http://core:8080", "admin-secret", control_url="http://core:8091", transport=httpx.MockTransport(handler))
     result = await client.list_accounts()
 
     assert seen["authorization"] == "Bearer admin-secret"
+    assert seen["port"] == 8091
     assert result["accounts"][0]["token_masked"] == "********"
     assert result["accounts"][0]["use_count"] == 3
     assert result["stats"]["fail"] == 1

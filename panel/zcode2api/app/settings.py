@@ -67,6 +67,7 @@ CAPTCHA_SOLVE_TIMEOUT = _int("ZCODE_CAPTCHA_TIMEOUT", 40)  # 每次求解超时�
 # 开启后，面板账号与流量都通过核心内部 API；本地 SQLite 不再作为运行期账号池。
 CORE_ENABLED = _bool("ZCODE_CORE_ENABLED", False)
 CORE_URL = (os.getenv("ZCODE_CORE_URL", "http://core:8080") or "http://core:8080").rstrip("/")
+CORE_CONTROL_URL = (os.getenv("ZCODE_CORE_CONTROL_URL", CORE_URL) or CORE_URL).rstrip("/")
 CORE_ADMIN_KEY = os.getenv("ZCODE_CORE_ADMIN_KEY", "")
 CORE_PROXY_KEY = os.getenv("ZCODE_CORE_PROXY_KEY", "")
 CORE_TIMEOUT = float(os.getenv("ZCODE_CORE_TIMEOUT", "10"))

@@ -102,7 +102,7 @@ zcode2api 作为可视化控制面。用户请求只进入核心，面板只读�
 
 ## 内部控制 API
 
-控制 API 与公开代理鉴权分离，默认关闭并要求独立管理密钥。阶段 1 先复用核心进程的 HTTP listener，以 `/internal/*` 路径和私有网络隔离完成契约；后续部署需要时再把同一 handler 拆到独立监听地址，不能因此复用公开代理密钥。
+控制 API 与公开代理鉴权分离，默认关闭并要求独立管理密钥。核心启动后控制 API 绑定独立 listener，公开 listener 不再暴露 `/internal/*`；Compose 中控制 listener 只在服务网络内可达，不能复用公开代理密钥。
 
     GET    /internal/health
     GET    /internal/runtime
@@ -136,7 +136,8 @@ ZCODE_CORE_URL 和 ZCODE_CORE_ADMIN_KEY 连接核心。面板的账号、状态�
 
 ## 持久化与安全
 
-- 初始实现使用核心本地 AES-GCM 加密文件存储，账号凭据由控制密钥派生加密密钥；运行期状态保存在 AccountPool，凭据和启停状态在管理变更时持久化。
+- 核心使用本地 AES-GCM 加密文件存储，账号凭据由控制密钥派生加密密钥；运行期状态保存在 AccountPool，凭据和启停状态在管理变更时持久化。
+- quota monitor 按 provider 配置的 billing balance endpoint 周期巡检，余额耗尽会进入 exhausted，恢复后重新进入 active；未配置 endpoint 的 provider 保持 unknown，不伪造额度。
 - 数据目录必须可挂载，数据库文件权限限制为服务用户。
 - 日志只记录账号 ID、provider、状态和错误分类。
 - 账号导出默认关闭；如实现导出，必须显式管理鉴权并全程脱敏。

@@ -48,6 +48,7 @@ def _core_client() -> CoreClient:
     return CoreClient(
         settings.CORE_URL,
         settings.CORE_ADMIN_KEY,
+        control_url=settings.CORE_CONTROL_URL,
         proxy_key=settings.CORE_PROXY_KEY,
         timeout=settings.CORE_TIMEOUT,
     )

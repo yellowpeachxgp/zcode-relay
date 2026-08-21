@@ -114,9 +114,21 @@ clientSigning:
 control:
   enabled: false
   # adminKey: "change-me-and-keep-it-private"
+  host: "127.0.0.1"
+  port: 8090
   accountStorePath: "data/accounts.enc.json"
   coolingSeconds: 30
   maxConcurrencyPerAccount: 4
+
+# Provider quota polling. Disabled by default; enable after confirming the
+# provider billing endpoint contract.
+quota:
+  enabled: false
+  intervalSeconds: 60
+  timeoutMs: 10000
+  endpoints:
+    zai: "https://zcode.z.ai/api/v1/zcode-plan"
+    bigmodel: ""
 
 logging:
   level: info

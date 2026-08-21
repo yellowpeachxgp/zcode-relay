@@ -23,6 +23,18 @@ export interface AccountUsage {
   outputTokens?: number;
 }
 
+export type AccountQuotaStatus = "unknown" | "healthy" | "exhausted" | "error";
+
+export interface AccountQuotaSnapshot {
+  status: AccountQuotaStatus;
+  remaining?: number;
+  limit?: number;
+  used?: number;
+  updatedAt?: number;
+  source?: string;
+  error?: string;
+}
+
 export interface AccountPoolInput {
   id: string;
   provider: ProviderId;
@@ -53,6 +65,7 @@ export interface AccountSnapshot {
     outputTokens: number;
     updatedAt?: number;
   };
+  quota: AccountQuotaSnapshot;
 }
 
 export interface AccountLease {

@@ -5,6 +5,7 @@ import type {
   AccountPoolInput,
   AccountSnapshot,
   AccountStatus,
+  AccountQuotaSnapshot,
   AccountUsage,
 } from "./pool-types.js";
 import type { ProviderId } from "../provider/types.js";
@@ -32,6 +33,7 @@ interface AccountRecord {
     outputTokens: number;
     updatedAt?: number;
   };
+  quota: AccountQuotaSnapshot;
 }
 
 export interface AccountPoolOptions {
@@ -72,6 +74,7 @@ export class AccountPool {
       requestCount: 0,
       failureCount: 0,
       usage: { inputTokens: 0, outputTokens: 0 },
+      quota: { status: "unknown" },
     };
     this.accounts.set(record.id, record);
     return this.toSnapshot(record);
@@ -106,6 +109,12 @@ export class AccountPool {
       if (account.provider === provider && credentialString(account.credential) === value) return this.toSnapshot(account);
     }
     return null;
+  }
+
+  /** Internal quota/probe boundary; callers must never serialize this value. */
+  credentialFor(id: string): Credential | null {
+    const account = this.accounts.get(id);
+    return account ? { ...account.credential } : null;
   }
 
   update(id: string, changes: { credential?: Credential; mode?: AuthMode; enabled?: boolean; maxConcurrency?: number }): AccountSnapshot | null {
@@ -187,6 +196,22 @@ export class AccountPool {
     return this.toSnapshot(account);
   }
 
+  updateQuota(id: string, quota: AccountQuotaSnapshot): AccountSnapshot | null {
+    const account = this.accounts.get(id);
+    if (!account) return null;
+    account.quota = { ...quota };
+    if (quota.status === "exhausted") {
+      account.status = account.enabled ? "exhausted" : "disabled";
+      account.lastErrorClass = "quota";
+      account.lastError = quota.error ?? "quota exhausted";
+    } else if (quota.status === "healthy" && account.status === "exhausted" && account.lastErrorClass === "quota") {
+      account.status = account.enabled ? "active" : "disabled";
+      account.lastErrorClass = undefined;
+      account.lastError = undefined;
+    }
+    return this.toSnapshot(account);
+  }
+
   markFailure(id: string, failureClass: AccountFailureClass, error?: string): AccountSnapshot | null {
     const account = this.accounts.get(id);
     if (!account) return null;
@@ -258,6 +283,7 @@ export class AccountPool {
       lastErrorClass: account.lastErrorClass,
       lastError: account.lastError,
       usage: { ...account.usage },
+      quota: { ...account.quota },
     };
   }
 }

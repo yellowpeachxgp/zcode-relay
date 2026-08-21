@@ -4,7 +4,7 @@
  */
 import { readFileSync, existsSync } from "node:fs";
 import { parse } from "yaml";
-import type { ClientIdentityConfig, ProxyConfig, ProviderEndpoints, ProxyIdentity, ResponsesConfig, McpConfig, AsyncConfig, EndpointRoutingConfig, ClientSigningConfig, ControlConfig } from "./types.js";
+import type { ClientIdentityConfig, ProxyConfig, ProviderEndpoints, ProxyIdentity, ResponsesConfig, McpConfig, AsyncConfig, EndpointRoutingConfig, ClientSigningConfig, ControlConfig, QuotaConfig } from "./types.js";
 
 /** Environment variable keys that override YAML values. */
 const ENV = {
@@ -23,7 +23,12 @@ const ENV = {
   CLIENT_SIGNING_ENABLED: "ZCODE_CLIENT_SIGNING",
   CONTROL_ENABLED: "ZCODE_CONTROL_ENABLED",
   CONTROL_ADMIN_KEY: "ZCODE_CONTROL_ADMIN_KEY",
+  CONTROL_HOST: "ZCODE_CONTROL_HOST",
+  CONTROL_PORT: "ZCODE_CONTROL_PORT",
   ACCOUNT_STORE_PATH: "ZCODE_ACCOUNT_STORE_PATH",
+  QUOTA_ENABLED: "ZCODE_QUOTA_ENABLED",
+  QUOTA_INTERVAL_SECONDS: "ZCODE_QUOTA_INTERVAL_SECONDS",
+  QUOTA_TIMEOUT_MS: "ZCODE_QUOTA_TIMEOUT_MS",
 } as const;
 
 const DEFAULTS = {
@@ -67,6 +72,11 @@ const DEFAULTS = {
   ACCOUNT_STORE_PATH: "data/accounts.enc.json",
   CONTROL_COOLING_SECONDS: 30,
   CONTROL_MAX_CONCURRENCY: 4,
+  QUOTA_ENABLED: false,
+  QUOTA_INTERVAL_SECONDS: 60,
+  QUOTA_TIMEOUT_MS: 10000,
+  QUOTA_ZAI_ENDPOINT: "https://zcode.z.ai/api/v1/zcode-plan",
+  QUOTA_BIGMODEL_ENDPOINT: "",
 };
 
 /** Printable-ASCII gate copied from the ZCode bundle's `rYn` helper. */
@@ -135,6 +145,7 @@ export function loadConfig(path: string): ProxyConfig {
   const endpointRouting = resolveEndpointRoutingConfig(parsed?.endpointRouting);
   const clientSigning = resolveClientSigningConfig(parsed?.clientSigning);
   const control = resolveControlConfig(parsed?.control);
+  const quota = resolveQuotaConfig(parsed?.quota);
 
   const config: ProxyConfig = {
     server: { port, host },
@@ -152,6 +163,7 @@ export function loadConfig(path: string): ProxyConfig {
     mcp,
     async: asyncCfg,
     control,
+    quota,
     logging: { level: logLevel },
   };
 
@@ -159,14 +171,35 @@ export function loadConfig(path: string): ProxyConfig {
   return config;
 }
 
+function resolveQuotaConfig(raw: unknown): QuotaConfig {
+  const obj = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
+  const endpoints = obj.endpoints && typeof obj.endpoints === "object" ? obj.endpoints as Record<string, unknown> : {};
+  const enabledEnv = process.env[ENV.QUOTA_ENABLED];
+  const intervalRaw = process.env[ENV.QUOTA_INTERVAL_SECONDS] ?? obj.intervalSeconds;
+  const timeoutRaw = process.env[ENV.QUOTA_TIMEOUT_MS] ?? obj.timeoutMs;
+  return {
+    enabled: enabledEnv !== undefined ? resolveBool(enabledEnv, DEFAULTS.QUOTA_ENABLED) : resolveBool(obj.enabled, DEFAULTS.QUOTA_ENABLED),
+    intervalSeconds: resolvePositiveInt(intervalRaw, DEFAULTS.QUOTA_INTERVAL_SECONDS, "quota.intervalSeconds"),
+    timeoutMs: resolvePositiveInt(timeoutRaw, DEFAULTS.QUOTA_TIMEOUT_MS, "quota.timeoutMs"),
+    endpoints: {
+      zai: typeof endpoints.zai === "string" ? endpoints.zai.trim() : DEFAULTS.QUOTA_ZAI_ENDPOINT,
+      bigmodel: typeof endpoints.bigmodel === "string" ? endpoints.bigmodel.trim() : DEFAULTS.QUOTA_BIGMODEL_ENDPOINT,
+    },
+  };
+}
+
 function resolveControlConfig(raw: unknown): ControlConfig {
   const obj = raw && typeof raw === "object" ? raw as Record<string, unknown> : {};
   const enabledEnv = process.env[ENV.CONTROL_ENABLED];
   const adminKey = process.env[ENV.CONTROL_ADMIN_KEY] ?? (typeof obj.adminKey === "string" ? obj.adminKey.trim() : undefined);
   const accountStorePath = (process.env[ENV.ACCOUNT_STORE_PATH] ?? (typeof obj.accountStorePath === "string" ? obj.accountStorePath.trim() : DEFAULTS.ACCOUNT_STORE_PATH)).trim();
+  const host = (process.env[ENV.CONTROL_HOST] ?? (typeof obj.host === "string" ? obj.host.trim() : "127.0.0.1")).trim() || "127.0.0.1";
+  const port = resolvePositiveInt(process.env[ENV.CONTROL_PORT] ?? obj.port, 8090, "control.port");
   return {
     enabled: enabledEnv !== undefined ? resolveBool(enabledEnv, DEFAULTS.CONTROL_ENABLED) : resolveBool(obj.enabled, DEFAULTS.CONTROL_ENABLED),
     ...(adminKey ? { adminKey } : {}),
+    host,
+    port,
     accountStorePath,
     coolingSeconds: resolveNonNegativeInt(obj.coolingSeconds, DEFAULTS.CONTROL_COOLING_SECONDS, "control.coolingSeconds"),
     maxConcurrencyPerAccount: resolvePositiveInt(obj.maxConcurrencyPerAccount, DEFAULTS.CONTROL_MAX_CONCURRENCY, "control.maxConcurrencyPerAccount"),

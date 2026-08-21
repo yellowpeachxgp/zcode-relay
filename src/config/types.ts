@@ -161,12 +161,26 @@ export interface ControlConfig {
   enabled: boolean;
   /** Independent management key; must not be reused as the public proxy key. */
   adminKey?: string;
+  /** Host and port for the independent control listener. */
+  host?: string;
+  port?: number;
   /** Encrypted account-store path. Relative paths are resolved from the process directory. */
   accountStorePath?: string;
   /** Cooling duration for rate-limit, network and upstream failures. */
   coolingSeconds?: number;
   /** Default per-account concurrency limit. */
   maxConcurrencyPerAccount?: number;
+}
+
+/** Provider quota/余额 polling configuration. */
+export interface QuotaConfig {
+  enabled: boolean;
+  intervalSeconds: number;
+  timeoutMs: number;
+  endpoints: {
+    zai: string;
+    bigmodel: string;
+  };
 }
 
 /** Top-level proxy configuration. */
@@ -208,6 +222,8 @@ export interface ProxyConfig {
   async: AsyncConfig;
   /** Optional internal control plane for account-pool management. */
   control?: ControlConfig;
+  /** Optional provider quota polling. */
+  quota?: QuotaConfig;
   logging: {
     level: "debug" | "info" | "warn" | "error";
   };

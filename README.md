@@ -200,6 +200,8 @@ multi-session autosave (localStorage). Open Settings (⚙) to configure.
 | `control.enabled` | `ZCODE_CONTROL_ENABLED` | `false` | 启用独立管理密钥保护的账号池控制 API |
 | `control.adminKey` | `ZCODE_CONTROL_ADMIN_KEY` | — | 面板访问 `/internal/*` 的管理密钥，不能与 `auth.proxyApiKey` 相同 |
 | `control.accountStorePath` | `ZCODE_ACCOUNT_STORE_PATH` | `data/accounts.enc.json` | AES-GCM 加密账号存储路径 |
+| `control.host` / `control.port` | `ZCODE_CONTROL_HOST` / `ZCODE_CONTROL_PORT` | `127.0.0.1:8090` | 独立控制 listener；面板只连接此地址管理核心 |
+| `quota.enabled` | `ZCODE_QUOTA_ENABLED` | `false` | 开启 provider 余额巡检和耗尽状态同步 |
 | config file path | `ZCODE_PROXY_CONFIG` | `config.yaml` | Config file to load on `serve` |
 
 Start-plan captcha tunables (env only): `ZCODE_CAPTCHA_RETRIES`, `ZCODE_CAPTCHA_TIMEOUT_MS`, `ZCODE_CAPTCHA_SDK_LOAD_MS`.

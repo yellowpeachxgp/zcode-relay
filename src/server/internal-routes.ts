@@ -10,6 +10,7 @@ export interface InternalRouteOptions {
   config: ProxyConfig;
   auth: AuthManager;
   onPoolChanged?: () => void;
+  onQuotaCheck?: (accountId?: string) => Promise<unknown>;
 }
 
 /** Handle /internal/* routes. Returns null for paths outside the control API. */
@@ -51,7 +52,8 @@ export async function handleInternalRoute(req: Request, opts: InternalRouteOptio
     return json({ strategy: "round_robin", retryableStatuses: [401, 402, 429, 500, 502, 503, 504], providerIsolation: true });
   }
   if (req.method === "POST" && path === "/internal/accounts/check") {
-    return json({ checkedAt: Date.now(), accounts: pool.list(), mode: "runtime_only" });
+    const result = opts.onQuotaCheck ? await opts.onQuotaCheck() : pool.list();
+    return json({ checkedAt: Date.now(), accounts: result, mode: opts.onQuotaCheck ? "provider_quota" : "runtime_only" });
   }
 
   const match = path.match(/^\/internal\/accounts\/([^/]+)(?:\/(enable|disable|check))?$/);
@@ -70,7 +72,8 @@ export async function handleInternalRoute(req: Request, opts: InternalRouteOptio
   if (req.method === "POST" && match[2] === "check") {
     const account = pool.snapshot(id);
     if (!account) return jsonError(404, "not_found_error", "Account not found");
-    return json({ ok: true, mode: "runtime_only", checkedAt: Date.now(), account });
+    const result = opts.onQuotaCheck ? await opts.onQuotaCheck(id) : account;
+    return json({ ok: true, mode: opts.onQuotaCheck ? "provider_quota" : "runtime_only", checkedAt: Date.now(), account: result });
   }
   if (req.method === "PUT" && !match[2]) return updateAccount(req, pool, id, opts.onPoolChanged);
   return jsonError(404, "not_found_error", "No route for " + req.method + " " + path);

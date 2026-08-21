@@ -23,11 +23,13 @@ class CoreClient:
         base_url: str,
         admin_key: str,
         *,
+        control_url: str | None = None,
         proxy_key: str = "",
         timeout: float = 10.0,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
+        self.control_url = (control_url or base_url).rstrip("/")
         self.admin_key = admin_key
         self.proxy_key = proxy_key
         self.timeout = timeout
@@ -41,12 +43,12 @@ class CoreClient:
             headers["authorization"] = f"Bearer {self.proxy_key}"
         return headers
 
-    def _make_client(self) -> httpx.AsyncClient:
-        return httpx.AsyncClient(base_url=self.base_url, timeout=self.timeout, transport=self.transport)
+    def _make_client(self, *, control: bool = False) -> httpx.AsyncClient:
+        return httpx.AsyncClient(base_url=self.control_url if control else self.base_url, timeout=self.timeout, transport=self.transport)
 
     async def _json_request(self, method: str, path: str, *, json: Any = None) -> dict[str, Any]:
         try:
-            async with self._make_client() as client:
+            async with self._make_client(control=True) as client:
                 response = await client.request(method, path, headers=self._headers(admin=True), json=json)
         except httpx.HTTPError as error:
             raise CoreUnavailable(f"核心不可用: {error}") from error
@@ -190,7 +192,7 @@ def _map_account(account: dict[str, Any]) -> dict[str, Any]:
         "token_masked": account.get("credentialMasked", "********"),
         "enabled": bool(account.get("enabled", False)),
         "status": account.get("status", "active"),
-        "quota": {},
+        "quota": _map_quota(account.get("quota")),
         "plan": {},
         "usage": {},
         "use_count": int(account.get("requestCount", 0) or 0),
@@ -210,6 +212,17 @@ def _provider_selectable(pool: dict[str, Any], provider: str) -> int:
     if provider == pool.get("provider"):
         return int(pool.get("selectable", 0) or 0)
     return 0
+
+
+def _map_quota(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict) or value.get("status") not in {"healthy", "exhausted"}:
+        return {}
+    remaining = value.get("remaining")
+    limit = value.get("limit")
+    used = value.get("used")
+    if not any(isinstance(item, (int, float)) for item in (remaining, limit, used)):
+        return {}
+    return {"provider": {"total": limit, "used": used, "remaining": remaining, "expires_at": None}}
 
 
 def _forward_headers(request: Request) -> dict[str, str]:

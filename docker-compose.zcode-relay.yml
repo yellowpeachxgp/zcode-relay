@@ -10,6 +10,8 @@ services:
       ZCODE_PROXY_PORT: "8080"
       ZCODE_PROXY_API_KEY: "${ZCODE_CORE_PROXY_KEY:?请设置 ZCODE_CORE_PROXY_KEY}"
       ZCODE_CONTROL_ENABLED: "true"
+      ZCODE_CONTROL_HOST: 0.0.0.0
+      ZCODE_CONTROL_PORT: "8091"
       ZCODE_CONTROL_ADMIN_KEY: "${ZCODE_CORE_ADMIN_KEY:?请设置 ZCODE_CORE_ADMIN_KEY}"
       ZCODE_ACCOUNT_STORE_PATH: /data/accounts.enc.json
       ZCODE_ENDPOINT_ROUTING: "false"
@@ -18,6 +20,7 @@ services:
       - zcode-relay-core-data:/data
     expose:
       - "8080"
+      - "8091"
     networks:
       - zcode-relay
     healthcheck:
@@ -41,6 +44,7 @@ services:
       ZCODE_GATEWAY_KEY: "${ZCODE_GATEWAY_KEY:?请设置 ZCODE_GATEWAY_KEY}"
       ZCODE_CORE_ENABLED: "true"
       ZCODE_CORE_URL: http://core:8080
+      ZCODE_CORE_CONTROL_URL: http://core:8091
       ZCODE_CORE_ADMIN_KEY: "${ZCODE_CORE_ADMIN_KEY:?请设置 ZCODE_CORE_ADMIN_KEY}"
       ZCODE_CORE_PROXY_KEY: "${ZCODE_CORE_PROXY_KEY:?请设置 ZCODE_CORE_PROXY_KEY}"
       ZCODE_CORE_TIMEOUT: "10"

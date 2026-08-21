@@ -51,6 +51,14 @@
 - 验证补充：修正集成测试使用不存在的 `config.test.yaml`，改用仓库内 `config.example.yaml` 作为测试模板；补齐 Responses 路由账号池接入和 token usage 累计；`bun test` 全量为 526 pass、0 fail；真实核心进程再次验证无鉴权 `/health` 与控制 `/internal/runtime` 均 200；真实上游专用账号验证仍不执行。
 - 未完成：provider quota 周期刷新、独立控制 listener 和远程推送。
 
+## 2026-08-22：完成 quota monitor 与独立控制 listener
+
+- 修改：新增 `src/auth/quota.ts` 与 quota 回归测试；支持 provider endpoint、超时、健康/耗尽/error/unknown 状态和周期巡检。
+- 修改：核心 server 将控制 API 绑定到 `control.host/control.port` 独立 listener，公开 listener 隐藏 `/internal/*`；面板管理 URL 与公开流量 URL 分离。
+- 修改：Compose 使用 core `8080` 转发端口和 `8091` 控制端口，控制端口不发布到宿主机。
+- 验证：加入 quota 与独立 listener 后 `bun test` 为 530 pass、0 fail；`bun x tsc --noEmit`、面板 pytest/compileall、Compose config 均通过。
+- 状态：本轮开发目标已完成，剩余为 provider-specific 生产 endpoint 校验和 quota 报表/通知增强。
+
 ## 2026-08-22：阶段 1 验证报告与远程对账
 
 - 产物：新增 `readme/analysis/2026-08-22-phase1-verification.md`，记录范围、命令、结果、安全检查和已知边界。

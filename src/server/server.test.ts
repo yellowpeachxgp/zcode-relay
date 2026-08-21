@@ -3,7 +3,7 @@
  * @see .omo/plans/zcode-proxy.md Task 7
  */
 import { describe, it, expect } from "bun:test";
-import { createFetchHandler } from "./server.js";
+import { createFetchHandler, startServer } from "./server.js";
 import { handleListModels } from "./routes-openai.js";
 import { handleMessages } from "./routes-anthropic.js";
 import type { ProxyConfig } from "../config/types.js";
@@ -230,6 +230,27 @@ describe("internal control routing", () => {
     const response = await handler(new Request("http://localhost/internal/accounts", { headers: { authorization: "Bearer control-secret" } }));
     expect(response.status).toBe(200);
     expect((await response.json()).accounts[0].credentialMasked).toBe("********");
+  });
+
+  it("starts the control API on a separate listener and hides it from the public listener", async () => {
+    const config = makeConfig({
+      auth: { mode: "apikey", apiKey: "test", proxyApiKey: "public-secret" },
+      control: { enabled: true, adminKey: "control-secret", host: "127.0.0.1", port: 0 },
+    });
+    const pool = new AccountPool();
+    pool.add({ id: "zai-1", provider: "zai", credential: { apiKey: "pool-secret", provider: "zai" } });
+    const auth = new AuthManager({ mode: "apikey", provider: "zai", pool });
+    const server = await startServer({ config, auth });
+
+    try {
+      expect(server.controlPort).toBeGreaterThan(0);
+      const controlResponse = await fetch(`http://127.0.0.1:${server.controlPort}/internal/health`, { headers: { authorization: "Bearer control-secret" } });
+      expect(controlResponse.status).toBe(200);
+      const publicResponse = await fetch(`http://127.0.0.1:${server.port}/internal/health`, { headers: { authorization: "Bearer public-secret" } });
+      expect(publicResponse.status).toBe(404);
+    } finally {
+      await server.close();
+    }
   });
 });
 

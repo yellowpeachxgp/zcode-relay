@@ -19,6 +19,7 @@ import { handleAsyncMessagesRoute, handleAsyncChatRoute, handleAsyncHealthRoute 
 import { errorResponse } from "../proxy/handler.js";
 import type { ResponseStore } from "../responses/store.js";
 import { handleInternalRoute } from "./internal-routes.js";
+import type { QuotaMonitor } from "../auth/quota.js";
 
 interface ServerOptions {
   config: ProxyConfig;
@@ -31,12 +32,18 @@ interface ServerOptions {
   responseStore?: ResponseStore;
   /** Persist account-pool mutations made by the internal control API. */
   onPoolChanged?: () => void;
+  /** Quota checker owned by the core runtime. */
+  quotaMonitor?: QuotaMonitor;
+  /** Keep internal routes available for direct handler tests; startServer disables them on public listener. */
+  exposeInternal?: boolean;
 }
 
 /** Minimal server handle: what the caller needs to print URLs and shut down. */
 export interface ProxyServer {
   hostname: string;
   port: number;
+  controlHostname?: string;
+  controlPort?: number;
   /** Close the server. When `exit` is true, also call `process.exit(0)`. */
   stop(exit?: boolean): void;
   /** Promise that resolves once the server has fully stopped. */
@@ -78,8 +85,13 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
       });
     }
 
-    if (path === "/internal" || path.startsWith("/internal/")) {
-      return (await handleInternalRoute(req, { config, auth, onPoolChanged: opts.onPoolChanged })) ?? errorResponse(404, "not_found_error", `No route for ${method} ${path}`);
+    if (opts.exposeInternal !== false && (path === "/internal" || path.startsWith("/internal/"))) {
+      return (await handleInternalRoute(req, {
+        config,
+        auth,
+        onPoolChanged: opts.onPoolChanged,
+        onQuotaCheck: opts.quotaMonitor ? (id) => id ? opts.quotaMonitor!.checkAccount(id) : opts.quotaMonitor!.checkAll() : undefined,
+      })) ?? errorResponse(404, "not_found_error", `No route for ${method} ${path}`);
     }
 
     // Health is intentionally a low-information liveness probe so container
@@ -139,25 +151,73 @@ export function createFetchHandler(opts: ServerOptions): (req: Request) => Promi
  * timeouts.
  */
 export function startServer(opts: ServerOptions): Promise<ProxyServer> {
-  const handler = createFetchHandler(opts);
-  const { port: requestedPort, host } = opts.config.server;
+  const publicHandler = createFetchHandler({ ...opts, exposeInternal: false });
+  const controlEnabled = opts.config.control?.enabled === true;
+  const controlHandler = controlEnabled ? createControlFetchHandler(opts) : null;
+  const publicBinding = bindHttpServer(publicHandler, opts.config.server.port, opts.config.server.host);
+  const controlBinding = controlHandler
+    ? bindHttpServer(controlHandler, opts.config.control?.port ?? 8090, opts.config.control?.host ?? "127.0.0.1")
+    : Promise.resolve(null);
 
+  return Promise.all([publicBinding, controlBinding]).then(([publicServer, controlServer]) => {
+    opts.quotaMonitor?.start();
+    let closePromise: Promise<void> | null = null;
+    const close = (): Promise<void> => {
+      if (!closePromise) {
+        opts.quotaMonitor?.stop();
+        closePromise = Promise.all([
+          publicServer.close(),
+          controlServer?.close() ?? Promise.resolve(),
+        ]).then(() => undefined);
+      }
+      return closePromise;
+    };
+    return {
+      hostname: publicServer.hostname,
+      port: publicServer.port,
+      ...(controlServer ? { controlHostname: controlServer.hostname, controlPort: controlServer.port } : {}),
+      stop: (exit?: boolean) => {
+        void close().then(() => { if (exit) process.exit(0); });
+      },
+      close,
+    };
+  }).catch(async (error) => {
+    opts.quotaMonitor?.stop();
+    throw error;
+  });
+}
+
+/** 只暴露内部控制 API 的 fetch handler，绑定在独立 listener 上。 */
+export function createControlFetchHandler(opts: ServerOptions): (req: Request) => Promise<Response> {
+  return async (req: Request): Promise<Response> => {
+    const url = new URL(req.url);
+    if (req.method === "OPTIONS") return corsResponse();
+    if (url.pathname === "/internal" || url.pathname.startsWith("/internal/")) {
+      return (await handleInternalRoute(req, {
+        config: opts.config,
+        auth: opts.auth,
+        onPoolChanged: opts.onPoolChanged,
+        onQuotaCheck: opts.quotaMonitor ? (id) => id ? opts.quotaMonitor!.checkAccount(id) : opts.quotaMonitor!.checkAll() : undefined,
+      })) ?? errorResponse(404, "not_found_error", `No route for ${req.method} ${url.pathname}`);
+    }
+    return errorResponse(404, "not_found_error", `No route for ${req.method} ${url.pathname}`);
+  };
+}
+
+interface BoundServer {
+  hostname: string;
+  port: number;
+  close(): Promise<void>;
+}
+
+function bindHttpServer(handler: (req: Request) => Promise<Response>, requestedPort: number, host: string): Promise<BoundServer> {
   const server: Server = createServer(async (req, res) => {
     const abortController = new AbortController();
     const onClientClose = (): void => {
       if (!res.writableEnded) abortController.abort();
     };
     res.on("close", onClientClose);
-
-    // `/async/*` routes can hold the connection open for minutes-to-hours while
-    // waiting for an off-peak ticket. Lift the per-request socket timeout from
-    // the default 600s (set below via server.requestTimeout) to 24h so the long
-    // queue wait + LLM stream doesn't get killed mid-flight. Non-async routes
-    // keep the default timeout.
-    if ((req.url ?? "").startsWith("/async/")) {
-      req.setTimeout(24 * 60 * 60 * 1000);
-    }
-
+    if ((req.url ?? "").startsWith("/async/")) req.setTimeout(24 * 60 * 60 * 1000);
     try {
       const webReq = nodeReqToWebRequest(req, abortController.signal);
       const resp = await handler(webReq).then((r) => addCorsHeaders(r));
@@ -172,28 +232,15 @@ export function startServer(opts: ServerOptions): Promise<ProxyServer> {
       }
     }
   });
-
-  // Disable all Node HTTP server timeouts to match Bun's `idleTimeout: 0`.
-  // Long LLM reasoning calls (60-120s before first token) would otherwise
-  // be killed by Node's defaults.
   server.requestTimeout = 600_000;
   server.keepAliveTimeout = 120_000;
   server.headersTimeout = 600_000;
-
-  return new Promise<ProxyServer>((resolve, reject) => {
+  return new Promise<BoundServer>((resolve, reject) => {
     server.on("error", reject);
     server.listen(requestedPort, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : requestedPort;
-      resolve({
-        hostname: host,
-        port: actualPort,
-        stop: (exit) => {
-          server.close();
-          if (exit) process.exit(0);
-        },
-        close: () => new Promise<void>((r) => server.close(() => r())),
-      });
+      resolve({ hostname: host, port: actualPort, close: () => new Promise<void>((r) => server.close(() => r())) });
     });
   });
 }
