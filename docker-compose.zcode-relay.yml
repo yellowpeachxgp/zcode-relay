@@ -16,6 +16,9 @@ services:
       ZCODE_ACCOUNT_STORE_PATH: /data/accounts.enc.json
       ZCODE_ENDPOINT_ROUTING: "false"
       ZCODE_CLIENT_SIGNING: "false"
+      ZCODE_QUOTA_ENABLED: "true"
+      ZCODE_QUOTA_INTERVAL_SECONDS: "60"
+      ZCODE_QUOTA_TIMEOUT_MS: "10000"
     volumes:
       - zcode-relay-core-data:/data
     expose:
