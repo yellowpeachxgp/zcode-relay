@@ -1,8 +1,8 @@
 # 架构概览（Architecture）
 
-本文件描述 **zcode2api** 的整体架构、核心组件、请求流程与关键设计决策。
+本文件描述 **zcode-relay 管理面板** 的整体架构、核心组件、请求流程与关键设计决策。
 
-> zcode2api 是一个网关:对外暴露标准 **Anthropic Messages API**(`/v1/messages`),
+> zcode-relay 管理面板是一个网关控制面：对外暴露标准 **Anthropic Messages API**(`/v1/messages`),
 > 对内将请求转发到 **ZCode (zcode.z.ai) Coding Plan** 上游,并提供多账号轮询、
 > 额度用完自动换号、实时用量监控、后台管理 UI 与鉴权,以及阿里云无痕验证自动续期。
 
@@ -30,7 +30,7 @@ graph TD
         UI["后台管理 UI（浏览器）"]
     end
 
-    subgraph App["zcode2api（FastAPI 单进程）"]
+    subgraph App["zcode-relay（FastAPI 单进程）"]
         direction TB
         GW["Gateway 网关<br/>/v1/messages · /v1/models"]
         ADMIN["Admin API<br/>/admin/api/*"]

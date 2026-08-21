@@ -1,4 +1,4 @@
-/* zcode2api — Auth module (localStorage 加密存储后台密钥) */
+/* zcode-relay — Auth module (localStorage 加密存储后台密钥) */
 const ADMIN_API = '/admin/api';
 
 const _ENC = new TextEncoder(), _DEC = new TextDecoder();

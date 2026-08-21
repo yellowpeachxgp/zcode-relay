@@ -52,7 +52,7 @@ export interface ProxyHandlerOptions {
   /**
    * When true, emit additional per-request diagnostic lines: upstream URL,
    * redacted request headers, body preview, upstream response status and
-   * selected response headers. Activated by `zcode-proxy serve debug`.
+   * selected response headers. Activated by `zcode-relay serve debug`.
    */
   debug?: boolean;
   /** Override the process-wide endpoint routing service (for testing). `null` disables. */
@@ -298,7 +298,7 @@ export async function proxyRequest(
     if (debug) debugError(reqId, "start_plan_jwt_invalid", "JWT rejected upstream");
     printRow(reqId, format, meta, 401, started, headersAt, 0, 0, 0);
     releaseLease();
-    return errorResponse(401, "start_plan_jwt_invalid", "Start-plan JWT was rejected. Re-run: zcode-proxy auth login");
+    return errorResponse(401, "start_plan_jwt_invalid", "Start-plan JWT was rejected. Re-run: zcode-relay auth login");
   }
 
   // start-plan: on explicit captcha challenge, force re-solve and retry once.

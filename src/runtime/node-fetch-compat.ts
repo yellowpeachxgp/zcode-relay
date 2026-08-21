@@ -36,6 +36,6 @@ export async function ensureNodeFetchNoTimeouts(): Promise<void> {
     const { Agent, setGlobalDispatcher } = await import("undici");
     setGlobalDispatcher(new Agent({ headersTimeout: 0, bodyTimeout: 0 }));
   } catch (err) {
-    console.error(`zcode-proxy: could not disable Node fetch default timeouts: ${(err as Error).message}`);
+    console.error(`zcode-relay: could not disable Node fetch default timeouts: ${(err as Error).message}`);
   }
 }

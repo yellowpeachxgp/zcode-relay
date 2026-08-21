@@ -4,7 +4,7 @@
 
 zcode-relay 是一个由管理面板和数据面核心组成的 ZCode 代理产品。
 
-- 控制面：panel/zcode2api。
+- 控制面：zcode-relay 管理面板（源码目录为 panel/zcode2api）。
 - 数据面：根目录 zcode-api。
 - 上游：Z.AI 和 BigModel。
 
@@ -29,4 +29,3 @@ zcode-relay 是一个由管理面板和数据面核心组成的 ZCode 代理产�
 - quota：上游账号套餐或额度快照。
 - usage：一次请求或一段时间内实际消耗的输入、输出 token。
 - challenge：验证码、WAF 或客户端签名挑战，不等价于无效凭据。
-

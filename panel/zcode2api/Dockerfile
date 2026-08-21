@@ -1,4 +1,4 @@
-# zcode2api — Python(FastAPI) + Node(jsdom 无痕验证求解器)
+# zcode-relay 管理面板 — Python(FastAPI) + Node(jsdom 无痕验证求解器)
 # 运行期同时需要 Python 与 Node：网关用 Python，验证码求解以 Node 子进程方式运行。
 FROM python:3.13-slim
 

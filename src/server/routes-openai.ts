@@ -21,7 +21,7 @@ export function handleListModels(): Response {
     data: MODELS.map((m) => ({
       id: m.id,
       object: "model" as const,
-      owned_by: "zcode-proxy",
+      owned_by: "zcode-relay",
     })),
   };
   return new Response(JSON.stringify(list), {

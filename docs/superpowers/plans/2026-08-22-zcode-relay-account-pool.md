@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Execute this plan on the main thread with test-driven development and verification checkpoints. Do not use subagents.
 
-**Goal:** 将 zcode-api 的单凭据运行时扩展为按 provider 隔离的多账号池，并让 zcode2api 面板通过内部控制 API 管理核心。
+**Goal:** 将 zcode-api 的单凭据运行时扩展为按 provider 隔离的多账号池，并让 zcode-relay 管理面板通过内部控制 API 管理核心。
 
 **Architecture:** 在 src/auth/ 增加核心账号池与持久化边界，把 AuthManager 改成按请求解析账号租约；src/proxy/handler.ts 在可重试错误时释放并切换账号，同时保留现有协议转换；src/server/ 增加独立鉴权的内部控制路由。面板新增 Python 核心客户端，在配置开启时把账号与状态请求转发到核心。
 
@@ -73,7 +73,7 @@
 - [ ] 运行定向路由测试、核心全量测试和类型检查。
 - [ ] 提交 feat: 增加核心内部控制 API。
 
-### Task 5: zcode2api 远程核心适配
+### Task 5: zcode-relay 管理面板远程核心适配
 
 **Files:**
 - Create: panel/zcode2api/app/core_client.py
@@ -104,4 +104,3 @@
 - [ ] 记录每个命令的退出码、测试数量和已知限制。
 - [ ] 使用中文提交信息提交阶段成果。
 - [ ] 添加自有 origin 后推送 master，并核对本地与远程 SHA。
-

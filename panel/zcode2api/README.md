@@ -1,4 +1,4 @@
-# zcode2api
+# zcode-relay 管理面板
 
 将 ZCode (zcode.z.ai) Coding Plan 额度转为标准 Anthropic Messages API，支持多账号轮询、
 额度用完自动换号、实时用量监控、后台管理 UI 与鉴权，以及阿里云无痕验证自动续期。
@@ -27,13 +27,13 @@ docker compose up -d --build
 # 账号 / 设置持久化在宿主机 ./data 目录；停止：docker compose down
 
 # 方式二：docker 原生命令
-docker build -t zcode2api:latest .
-docker run -d --name zcode2api \
+docker build -t zcode-relay-panel:latest .
+docker run -d --name zcode-relay-panel \
   -p 3000:3000 \
   -v "$(pwd)/data:/data" \
   -e ZCODE_ADMIN_KEY=zcode \
   --restart unless-stopped \
-  zcode2api:latest
+  zcode-relay-panel:latest
 ```
 
 - 数据卷:容器内 `/data`(对应 `ZCODE_DATA_DIR`)存放 `accounts.db`,务必挂载到宿主机以持久化。
@@ -48,7 +48,7 @@ docker run -d --name zcode2api \
 
 ```bash
 # 拉取并运行已发布镜像（tag: latest 或 sha-xxxxxxx）
-docker run -d --name zcode2api -p 3000:3000 \
+docker run -d --name zcode-relay-panel -p 3000:3000 \
   -v "$(pwd)/data:/data" -e ZCODE_ADMIN_KEY=zcode \
   ghcr.io/yuanhhs/zcode2api:latest
 ```

@@ -1,4 +1,4 @@
-# zcode-proxy
+# zcode-relay
 
 A reverse proxy for Z.AI / Bigmodel.cn coding-plan APIs that exposes both OpenAI-compatible and Anthropic-format endpoints.
 
@@ -300,7 +300,7 @@ docker run --rm -p 8080:8080 \
   ghcr.io/tridefender/zcode-proxy:latest
 ```
 
-> Note: `/health` and all routes sit behind the proxy-API-key check, so health probes must send `x-api-key: <ZCODE_PROXY_API_KEY>`.
+> Note: `/health` is a low-information public liveness probe. The proxy and control routes remain independently authenticated.
 
 Common environment variables (see the Configuration table above for the full list):
 
@@ -315,7 +315,7 @@ docker-compose:
 
 ```yaml
 services:
-  zcode-proxy:
+  zcode-relay:
     image: ghcr.io/tridefender/zcode-proxy:latest
     ports:
       - "8080:8080"

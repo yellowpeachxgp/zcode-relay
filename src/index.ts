@@ -58,7 +58,7 @@ export function main(): void {
   try {
     runCli();
   } catch (err) {
-    process.stderr.write(`zcode-proxy: uncaught error: ${(err as Error).stack ?? String(err)}\n`);
+    process.stderr.write(`zcode-relay: uncaught error: ${(err as Error).stack ?? String(err)}\n`);
     process.exit(1);
   }
 }
@@ -77,7 +77,7 @@ function runCli(): void {
       : parseServeArgs(args);
     serve(serveArgs.configPath, serveArgs.debug);
   } else if (cmd === "version" || cmd === "--version" || cmd === "-v") {
-    console.log(`zcode-proxy ${VERSION}`);
+    console.log(`zcode-relay ${VERSION}`);
   } else if (cmd === "help" || cmd === "--help" || cmd === "-h") {
     printHelp();
   } else {
@@ -88,28 +88,28 @@ function runCli(): void {
 }
 
 function printHelp(): void {
-  console.log(`zcode-proxy ${VERSION}
+console.log(`zcode-relay ${VERSION}
 
 Usage:
-  zcode-proxy serve [config.yaml]   Start the proxy server (default)
-  zcode-proxy serve debug [config.yaml]
+  zcode-relay serve [config.yaml]   Start the relay server (default)
+  zcode-relay serve debug [config.yaml]
                                     Start with verbose per-request diagnostics
-  zcode-proxy android               Android entry: proxy + localhost control listener
-  zcode-proxy auth login <provider> Login via OAuth (provider: zai | bigmodel)
-  zcode-proxy auth login <provider> --import
+  zcode-relay android               Android entry: relay + localhost control listener
+  zcode-relay auth login <provider> Login via OAuth (provider: zai | bigmodel)
+  zcode-relay auth login <provider> --import
                                     Import API key from ~/.zcode/v2/config.json
-  zcode-proxy auth logout           Clear stored credentials
-  zcode-proxy auth status           Show current authentication state
-  zcode-proxy version               Show version
-  zcode-proxy help                  Show this help
+  zcode-relay auth logout           Clear stored credentials
+  zcode-relay auth status           Show current authentication state
+  zcode-relay version               Show version
+  zcode-relay help                  Show this help
 
 Examples:
-  zcode-proxy                       Start server with default config.yaml
-  zcode-proxy serve debug           Start with extra debug logging
-  zcode-proxy auth login bigmodel   OAuth login for Bigmodel
-  zcode-proxy auth login bigmodel --import
+  zcode-relay                       Start server with default config.yaml
+  zcode-relay serve debug           Start with extra debug logging
+  zcode-relay auth login bigmodel   OAuth login for Bigmodel
+  zcode-relay auth login bigmodel --import
                                     Import existing key from ZCode config
-  zcode-proxy auth status           Check if logged in
+  zcode-relay auth status           Check if logged in
 `);
 }
 
@@ -119,7 +119,7 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
     writeFileSync(path, EXAMPLE_CONFIG_YAML, "utf-8");
     ensureDeviceMidInConfig(path);
     console.log(`Created ${path} from bundled template.`);
-    console.log(`Edit auth.apiKey, or run: zcode-proxy auth login <zai|bigmodel>\n`);
+    console.log(`Edit auth.apiKey, or run: zcode-relay auth login <zai|bigmodel>\n`);
   }
   const config = loadConfig(path);
 
@@ -136,7 +136,7 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
   if (config.auth.mode === "oauth") {
     const cred = await loadCredential();
     if (!cred) {
-      console.error("Not logged in. Run: zcode-proxy auth login " + config.provider);
+      console.error("Not logged in. Run: zcode-relay auth login " + config.provider);
       process.exit(1);
     }
     oauthCredential = cred;
@@ -161,7 +161,7 @@ async function serve(configPath: string | undefined, debug: boolean): Promise<vo
 
   const server = await startServer(buildServerOptions(config, auth, debug, persistPool, quotaMonitor, oauthManager));
   const url = `http://${server.hostname}:${server.port}`;
-  console.log(`zcode-proxy listening on ${url}`);
+  console.log(`zcode-relay listening on ${url}`);
   console.log(`  provider: ${config.provider}`);
   console.log(`  plan: ${config.plan}`);
   console.log(`  auth mode: ${config.auth.mode}`);
@@ -266,7 +266,7 @@ async function runAndroid(): Promise<void> {
     try {
       const s = await startServer(buildServerOptions(config, auth, false));
       serverRef.current = s;
-      console.log(`zcode-proxy listening on http://${s.hostname}:${s.port}`);
+      console.log(`zcode-relay listening on http://${s.hostname}:${s.port}`);
       return { ok: true, port: s.port };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -279,7 +279,7 @@ async function runAndroid(): Promise<void> {
     try {
       s.stop(false);
       serverRef.current = null;
-      console.log("zcode-proxy stopped");
+    console.log("zcode-relay stopped");
       return { ok: true };
     } catch (err) {
       return { ok: false, error: (err as Error).message };
@@ -348,7 +348,7 @@ function printDebugBanner(config: ProxyConfig, path: string): void {
   const cred = config.providers[config.provider].credential ?? config.auth.apiKey;
   const credShape = cred ? `${cred.slice(0, 6)}...${cred.slice(-4)} (${cred.length} chars)` : "(none — oauth)";
   const active = config.providers[config.provider];
-  console.log("=== zcode-proxy DEBUG MODE ===");
+  console.log("=== zcode-relay DEBUG MODE ===");
   console.log(`  config file: ${path}`);
   console.log(`  server: ${config.server.host}:${config.server.port}`);
   console.log(`  proxy api key: ${config.auth.proxyApiKey ? "required" : "open (no client auth)"}`);
@@ -374,7 +374,7 @@ function authCommand(args: string[]): void {
   } else if (sub === "status") {
     authStatus();
   } else {
-    console.error("Usage: zcode-proxy auth <login|logout|status>");
+  console.error("Usage: zcode-relay auth <login|logout|status>");
     process.exit(1);
   }
 }
@@ -384,7 +384,7 @@ async function authLogin(args: string[]): Promise<void> {
   const importMode = args.includes("--import");
 
   if (!provider || (provider !== "zai" && provider !== "bigmodel")) {
-    console.error("Usage: zcode-proxy auth login <zai|bigmodel> [--import]");
+    console.error("Usage: zcode-relay auth login <zai|bigmodel> [--import]");
     process.exit(1);
   }
 
@@ -475,7 +475,7 @@ async function authStatus(): Promise<void> {
   const cred = await loadCredential();
   if (!cred) {
     console.log("Not logged in.");
-    console.log("Run: zcode-proxy auth login <zai|bigmodel>");
+    console.log("Run: zcode-relay auth login <zai|bigmodel>");
     return;
   }
   console.log(`Logged in: ${cred.provider}`);

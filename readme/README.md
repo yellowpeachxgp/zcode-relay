@@ -5,7 +5,7 @@ zcode-relay 是我们的 ZCode 代理产品工程。
 当前组成：
 
 - 根目录：zcode-api 运行时核心，负责协议接入、请求转换、SSE、Responses、MCP 和上游转发。
-- panel/zcode2api/：管理面板来源，负责账号池可视化、运行状态、额度和策略控制。
+- panel/zcode2api/：zcode-relay 管理面板来源，负责账号池可视化、运行状态、额度和策略控制。
 - readme/：本项目的上下文、路线图、工程契约、变更账本和验证证据。
 
 ## 恢复顺序
@@ -29,4 +29,3 @@ zcode-relay 是我们的 ZCode 代理产品工程。
 ## 安全边界
 
 不把 API Key、JWT、Cookie、OAuth token、生产配置、账号数据库或真实请求体写入 Git、日志、测试夹具和报告。
-
