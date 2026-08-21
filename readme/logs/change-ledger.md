@@ -50,3 +50,10 @@
 - 验证：面板核心客户端 `pytest`，4 pass、0 fail；`python3 -m compileall -q panel/zcode2api` 通过；临时环境变量下 `docker compose -f docker-compose.zcode-relay.yml config` 通过；核心定向回归 101 pass、0 fail；`bun x tsc --noEmit` 和 `git diff --check` 通过。
 - 验证补充：修正集成测试使用不存在的 `config.test.yaml`，改用仓库内 `config.example.yaml` 作为测试模板；补齐 Responses 路由账号池接入和 token usage 累计；`bun test` 全量为 526 pass、0 fail；真实核心进程再次验证无鉴权 `/health` 与控制 `/internal/runtime` 均 200；真实上游专用账号验证仍不执行。
 - 未完成：provider quota 周期刷新、独立控制 listener 和远程推送。
+
+## 2026-08-22：阶段 1 验证报告与远程对账
+
+- 产物：新增 `readme/analysis/2026-08-22-phase1-verification.md`，记录范围、命令、结果、安全检查和已知边界。
+- 推送：功能提交 `3bdbb2c02204a48ea1cf97dcb62a7c96d60ae121` 已推送到 `origin/master`。
+- 对账：推送后 `git rev-parse HEAD` 与 `git ls-remote origin refs/heads/master` 均为 `3bdbb2c02204a48ea1cf97dcb62a7c96d60ae121`。
+- 说明：GitHub 对上游已有的 `Android-APP/.../libnode.so` 大文件给出建议警告；未改动该资产。
