@@ -59,6 +59,11 @@
 - 验证：加入 quota 与独立 listener 后 `bun test` 为 530 pass、0 fail；`bun x tsc --noEmit`、面板 pytest/compileall、Compose config 均通过。
 - 状态：本轮开发目标已完成，剩余为 provider-specific 生产 endpoint 校验和 quota 报表/通知增强。
 
+## 2026-08-22：部署默认启用 quota 巡检
+
+- 修改：Compose 核心服务默认注入 `ZCODE_QUOTA_ENABLED=true`、60 秒周期和 10 秒超时；本地演示环境仍关闭巡检，避免无真实账号时产生外部请求。
+- 推送：提交 `8085cf5` 已推送到 `origin/master`。
+
 ## 2026-08-22：阶段 1 验证报告与远程对账
 
 - 产物：新增 `readme/analysis/2026-08-22-phase1-verification.md`，记录范围、命令、结果、安全检查和已知边界。
