@@ -25,3 +25,11 @@
 - 安全：控制面可获得账号池对象，但账号快照仍只返回脱敏凭据。
 - 验证：bun test src/auth/pool.test.ts src/auth/manager.test.ts，23 pass、0 fail；bun x tsc --noEmit，退出码 0。
 - 未完成：请求故障转移、控制 API、面板适配和全量验证。
+
+## 2026-08-22：接入代理请求级账号故障转移
+
+- 修改：新增 `src/proxy/failover.ts` 与 `src/proxy/failover.test.ts`；代理 handler 在每个上游尝试前按租约重建凭据、请求头和请求对象。
+- 行为：对 401、402、429、5xx 和网络异常按账号标记并切换；客户端 4xx 不切换；响应流完成或提前结束时释放租约。
+- 安全：调试与控制路径继续使用现有脱敏逻辑，不返回完整凭据。
+- 验证：`bun test src/proxy/failover.test.ts`，4 pass、0 fail；包含真实 `proxyRequest` 链路的 429→第二账号回归；`bun x tsc --noEmit` 退出码 0；`git diff --check` 通过。
+- 未完成：内部控制 API、面板适配、持久化、全量验证和推送。

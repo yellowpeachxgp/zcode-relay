@@ -12,11 +12,13 @@
 import type { Format } from "../translator/types.js";
 import type { ProxyConfig } from "../config/types.js";
 import type { AuthManager } from "../auth/manager.js";
+import type { AccountLease } from "../auth/pool-types.js";
+import { executeWithAccountFailover } from "./failover.js";
 import { getProvider } from "../provider/providers.js";
 import { buildUpstreamHeaderPairs, buildUpstreamRequest, type UpstreamHeaderPair } from "./upstream.js";
 import { getDefaultEndpointRouting, type EndpointRoutingService } from "./endpoint-routing.js";
 import { getDefaultClientSigning, sendWithClientSigning, type ClientSigningManager } from "./client-signing.js";
-import { credentialString } from "../auth/types.js";
+import { credentialString, type Credential } from "../auth/types.js";
 import { sendOrderedUpstreamRequest } from "./ordered-transport.js";
 import { transformRequestBody } from "./body-transformer.js";
 import { type ClientSessionResult } from "./client-session.js";
@@ -57,6 +59,7 @@ export interface ProxyHandlerOptions {
   endpointRouting?: EndpointRoutingService | null;
   /** Override the process-wide client signing manager (for testing). `null` disables. */
   clientSigning?: ClientSigningManager | null;
+  maxAccountAttempts?: number;
 }
 
 /**
@@ -114,9 +117,11 @@ export async function proxyRequest(
     openaiBaseURL: config.providers[config.provider].openaiBase,
   };
 
-  let cred;
+  let initialLease: AccountLease;
+  let cred: Credential;
   try {
-    cred = await auth.getCredential();
+    initialLease = await auth.acquireCredential(config.provider);
+    cred = initialLease.credential;
   } catch (err) {
     if (debug) debugError(reqId, "credential_unavailable", (err as Error).message);
     printRow(reqId, format, meta, 503, started, Date.now(), 0, 0, 0);
@@ -139,12 +144,18 @@ export async function proxyRequest(
   let upstreamBody = body;
   if (translateOpenAIToAnthropic) {
     const translated = translateOpenAIBody(body);
-    if (translated instanceof Response) return translated;
+    if (translated instanceof Response) {
+      initialLease.release();
+      return translated;
+    }
     upstreamBody = translated;
     if (debug) debugLine(reqId, `translated OpenAI→Anthropic (bytes=${upstreamBody?.length ?? 0})`);
   } else if (translateAnthropicToOpenAI) {
     const translated = translateAnthropicBody(body);
-    if (translated instanceof Response) return translated;
+    if (translated instanceof Response) {
+      initialLease.release();
+      return translated;
+    }
     upstreamBody = translated;
     if (debug) debugLine(reqId, `translated Anthropic→OpenAI (bytes=${upstreamBody?.length ?? 0})`);
   }
@@ -172,10 +183,10 @@ export async function proxyRequest(
   const routing = opts.endpointRouting !== undefined ? opts.endpointRouting : getDefaultEndpointRouting(config);
   const signer = opts.clientSigning !== undefined ? opts.clientSigning : getDefaultClientSigning(config);
   const translateMode = translateOpenAIToAnthropic || translateAnthropicToOpenAI;
-  const dispatch = async (req: Request, pairs: UpstreamHeaderPair[]): Promise<Response> => {
+  const dispatch = async (req: Request, pairs: UpstreamHeaderPair[], requestCredential: Credential): Promise<Response> => {
     let sendUrl = req.url;
     if (routing) {
-      const routed = await routing.resolve(req.url, credentialString(cred));
+      const routed = await routing.resolve(req.url, credentialString(requestCredential));
       if (routed.routed) {
         sendUrl = routed.url;
         if (debug) debugLine(reqId, `endpoint routing: ${req.url} -> ${routed.url}`);
@@ -187,7 +198,7 @@ export async function proxyRequest(
     return sendWithClientSigning(signer, {
       url: req.url,
       headerPairs: pairs,
-      credential: credentialString(cred),
+      credential: credentialString(requestCredential),
       appVersion: config.identity.appVersion,
       debug: debug ? (message) => debugLine(reqId, message) : undefined,
       send: (finalPairs) => {
@@ -223,13 +234,49 @@ export async function proxyRequest(
   }
 
   let upstreamResp: Response;
+  let activeLease: AccountLease | null = null;
   try {
-    upstreamResp = await dispatch(upstreamReq, upstreamHeaderPairs);
+    const failover = await executeWithAccountFailover(
+      auth,
+      config.provider,
+      async (lease) => {
+        cred = lease.credential;
+        upstreamHeaderPairs = buildUpstreamHeaderPairs(
+          clientReq,
+          upstreamFormat,
+          cred,
+          config.identity,
+          config.plan,
+          captchaHeaders,
+          clientSession,
+        );
+        upstreamReq = buildUpstreamRequest(
+          clientReq,
+          upstreamFormat,
+          provider,
+          cred,
+          transformedBody,
+          config.identity,
+          config.plan,
+          captchaHeaders,
+          clientSession,
+        );
+        return dispatch(upstreamReq, upstreamHeaderPairs, cred);
+      },
+      opts.maxAccountAttempts ?? 3,
+      initialLease,
+    );
+    upstreamResp = failover.response;
+    activeLease = failover.lease;
   } catch (err) {
     if (debug) debugError(reqId, "upstream_unreachable", (err as Error).message);
     printRow(reqId, format, meta, 502, started, Date.now(), 0, 0, 0);
     return errorResponse(502, "upstream_unreachable", (err as Error).message);
   }
+  const releaseLease = (): void => {
+    activeLease?.release();
+    activeLease = null;
+  };
   const headersAt = Date.now();
 
   if (debug) {
@@ -250,6 +297,7 @@ export async function proxyRequest(
   if (upstreamResp.status === 401 && startPlan) {
     if (debug) debugError(reqId, "start_plan_jwt_invalid", "JWT rejected upstream");
     printRow(reqId, format, meta, 401, started, headersAt, 0, 0, 0);
+    releaseLease();
     return errorResponse(401, "start_plan_jwt_invalid", "Start-plan JWT was rejected. Re-run: zcode-proxy auth login");
   }
 
@@ -271,9 +319,10 @@ export async function proxyRequest(
       };
       upstreamHeaderPairs = buildUpstreamHeaderPairs(clientReq, upstreamFormat, cred, config.identity, config.plan, retryHeaders, clientSession);
       upstreamReq = buildUpstreamRequest(clientReq, upstreamFormat, provider, cred, transformedBody, config.identity, config.plan, retryHeaders, clientSession);
-      upstreamResp = await dispatch(upstreamReq, upstreamHeaderPairs).catch((err: Error) => {
+      upstreamResp = await dispatch(upstreamReq, upstreamHeaderPairs, cred).catch((err: Error) => {
         if (debug) debugError(reqId, "upstream_unreachable", err.message);
         printRow(reqId, format, meta, 502, started, Date.now(), 0, 0, 0);
+        releaseLease();
         return errorResponse(502, "upstream_unreachable", err.message);
       });
       if (debug) debugLine(reqId, `← retry ${upstreamResp.status} ${upstreamResp.statusText}`);
@@ -285,44 +334,54 @@ export async function proxyRequest(
   }
 
   const isSSE = upstreamResp.headers.get("content-type")?.includes("text/event-stream") ?? false;
+  if (activeLease && upstreamResp.ok) {
+    auth.getPool()?.markSuccess(activeLease.accountId);
+  }
 
   if (translateOpenAIToAnthropic) {
     if (!upstreamResp.ok) {
       const errBody = await upstreamResp.text().catch(() => "");
       printRow(reqId, format, meta, 502, started, headersAt, 0, 0, 0);
+      releaseLease();
       return errorResponse(502, "translation_failed", `upstream returned ${upstreamResp.status}: ${errBody.slice(0, 200)}`);
     }
     if (isSSE && upstreamResp.body) {
       const translated = anthropicSseToOpenaiSse(upstreamResp.body, meta.model);
       const [clientBody, statsBody] = translated.tee();
-      observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, null);
+      observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, null, releaseLease);
       return translatedSseResponse(clientBody);
     }
-    return await translatedBatchResponse(clientReq, upstreamResp, meta.model, reqId, format, meta, started, headersAt);
+    const response = await translatedBatchResponse(clientReq, upstreamResp, meta.model, reqId, format, meta, started, headersAt);
+    releaseLease();
+    return response;
   }
 
   if (translateAnthropicToOpenAI) {
     if (!upstreamResp.ok) {
       const errBody = await upstreamResp.text().catch(() => "");
       printRow(reqId, format, meta, 502, started, headersAt, 0, 0, 0);
+      releaseLease();
       return errorResponse(502, "translation_failed", `upstream returned ${upstreamResp.status}: ${errBody.slice(0, 200)}`);
     }
     if (isSSE && upstreamResp.body) {
       const translated = openaiSseToAnthropicSse(upstreamResp.body, meta.model);
       const [clientBody, statsBody] = translated.tee();
-      observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, null);
+      observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, null, releaseLease);
       return translatedSseResponse(clientBody);
     }
-    return await translatedOpenAIToAnthropicBatchResponse(clientReq, upstreamResp, reqId, format, meta, started, headersAt);
+    const response = await translatedOpenAIToAnthropicBatchResponse(clientReq, upstreamResp, reqId, format, meta, started, headersAt);
+    releaseLease();
+    return response;
   }
 
   if (isSSE && upstreamResp.body) {
     const [clientBody, statsBody] = upstreamResp.body.tee();
-    observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, upstreamResp.headers.get("content-encoding"));
+    observeStream(reqId, format, meta, upstreamResp.status, started, statsBody, upstreamResp.headers.get("content-encoding"), releaseLease);
     return passthroughResponse(upstreamResp, clientAcceptsGzip(clientReq), clientBody);
   }
 
   printRow(reqId, format, meta, upstreamResp.status, started, headersAt, 0, 0, 0);
+  releaseLease();
   return passthroughResponse(upstreamResp, clientAcceptsGzip(clientReq));
 }
 
@@ -858,6 +917,7 @@ function observeStream(
   requestSentAt: number,
   body: ReadableStream<Uint8Array>,
   contentEncoding: string | null,
+  onComplete?: () => void,
 ): void {
   const compressed = contentEncoding !== null;
   const dumpOn = dumpEnabled();
@@ -928,5 +988,6 @@ function observeStream(
         firstBytesSample: firstBytesSample.length > 0 ? firstBytesSample.slice(0, 4096) : "(empty stream)",
       });
     }
+    onComplete?.();
   })().catch(() => {});
 }
