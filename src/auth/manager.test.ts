@@ -6,6 +6,7 @@ import { describe, it, expect } from "bun:test";
 import { credentialString, isExpired } from "./types.js";
 import { createApiKeyCredential } from "./apikey.js";
 import { AuthManager } from "./manager.js";
+import { AccountPool } from "./pool.js";
 
 describe("credentialString", () => {
   it("returns apiKey.secret when secret present", () => {
@@ -110,5 +111,31 @@ describe("AuthManager", () => {
     expect(m1.getMode()).toBe("apikey");
     const m2 = new AuthManager({ mode: "oauth", provider: "zai" });
     expect(m2.getMode()).toBe("oauth");
+  });
+
+  it("从账号池按 provider 返回可释放的账号租约", async () => {
+    const pool = new AccountPool({ maxConcurrencyPerAccount: 1 });
+    pool.add({ id: "zai-1", provider: "zai", credential: { apiKey: "pool-1", provider: "zai" } });
+    pool.add({ id: "zai-2", provider: "zai", credential: { apiKey: "pool-2", provider: "zai" } });
+    const manager = new AuthManager({ mode: "apikey", provider: "zai", pool });
+
+    const first = await manager.acquireCredential();
+    const second = await manager.acquireCredential();
+
+    expect(first.accountId).toBe("zai-1");
+    expect(second.accountId).toBe("zai-2");
+    expect(first.credential.apiKey).toBe("pool-1");
+    first.release();
+    second.release();
+  });
+
+  it("账号池没有可用账号时返回明确错误", async () => {
+    const pool = new AccountPool({ maxConcurrencyPerAccount: 1 });
+    pool.add({ id: "zai-1", provider: "zai", credential: { apiKey: "pool-1", provider: "zai" } });
+    const manager = new AuthManager({ mode: "apikey", provider: "zai", pool });
+    const lease = await manager.acquireCredential();
+
+    expect(manager.acquireCredential()).rejects.toThrow(/no selectable account/);
+    lease.release();
   });
 });

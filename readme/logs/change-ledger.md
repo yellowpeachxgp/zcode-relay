@@ -17,3 +17,11 @@
 - 安全：账号快照只返回 credentialMasked，测试确认完整假凭据不会出现在 JSON。
 - 验证：bun test src/auth/pool.test.ts，4 pass、0 fail。
 - 未完成：AuthManager 接入、请求故障转移、控制 API、面板适配和全量验证。
+
+## 2026-08-22：AuthManager 接入账号租约
+
+- 修改：AuthManager 支持注入 AccountPool，并增加 acquireCredential。
+- 兼容：无账号池时保留原有单凭据 getCredential 行为；账号池模式要求显式使用租约。
+- 安全：控制面可获得账号池对象，但账号快照仍只返回脱敏凭据。
+- 验证：bun test src/auth/pool.test.ts src/auth/manager.test.ts，23 pass、0 fail；bun x tsc --noEmit，退出码 0。
+- 未完成：请求故障转移、控制 API、面板适配和全量验证。

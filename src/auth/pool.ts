@@ -8,6 +8,8 @@ import type {
 } from "./pool-types.js";
 import type { ProviderId } from "../provider/types.js";
 
+export type { AccountStatus } from "./pool-types.js";
+
 interface AccountRecord {
   id: string;
   provider: ProviderId;
